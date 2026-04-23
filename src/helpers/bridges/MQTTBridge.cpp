@@ -47,7 +47,7 @@ MQTTBridge::MQTTBridge(NodePrefs *prefs, mesh::PacketManager *mgr, mesh::RTCCloc
       _last_status_publish(0), _last_status_retry(0), _status_interval(300000), // 5 minutes default
               _ntp_client(_ntp_udp, "pool.ntp.org", 0, 60000), _last_ntp_sync(0), _ntp_synced(false),
               _timezone(nullptr), _last_raw_len(0), _last_snr(0), _last_rssi(0), _last_raw_timestamp(0),
-              _analyzer_us_enabled(false), _analyzer_eu_enabled(false), _identity(identity),
+              _analyzer_us_enabled(false), _analyzer_eu_enabled(false), _auth_token_custom{0}, _identity(identity),
               _analyzer_us_client(nullptr), _analyzer_eu_client(nullptr), _config_valid(false),
               _last_no_broker_log(0), _last_config_warning(0), _dispatcher(nullptr), _radio(nullptr), _board(nullptr), _ms(nullptr) {
   
@@ -294,6 +294,15 @@ void MQTTBridge::begin() {
   // Set default broker from preferences or build flags
   setBroker(0, _prefs->mqtt_server, _prefs->mqtt_port, _prefs->mqtt_username, _prefs->mqtt_password, true);
   
+  // Always populate _analyzer_username from identity so JWT auth works
+  // even when LetsMesh analyzer servers are disabled
+  if (_identity && _analyzer_username[0] == '\0') {
+    char public_key_hex[65];
+    mesh::Utils::toHex(public_key_hex, _identity->pub_key, PUB_KEY_SIZE);
+    snprintf(_analyzer_username, sizeof(_analyzer_username), "v1_%s", public_key_hex);
+    MQTT_DEBUG_PRINTLN("Device username: %s", _analyzer_username);
+  }
+
   // Setup Let's Mesh Analyzer servers
   setupAnalyzerServers();
   
@@ -652,6 +661,18 @@ bool MQTTBridge::isIATAValid() const {
   return true;
 }
 
+// Build broker URI based on tls/ws prefs.
+// WS+TLS  -> wss://host:port/mqtt
+// WS only -> ws://host:port/mqtt
+// TLS     -> mqtts://host:port
+// Plain   -> mqtt://host:port
+static void buildBrokerURI(char* buf, size_t len, const char* host, uint16_t port, bool tls, bool ws) {
+  if (ws && tls)       snprintf(buf, len, "wss://%s:%d/mqtt", host, port);
+  else if (ws)         snprintf(buf, len, "ws://%s:%d/mqtt", host, port);
+  else if (tls)        snprintf(buf, len, "mqtts://%s:%d", host, port);
+  else                 snprintf(buf, len, "mqtt://%s:%d", host, port);
+}
+
 void MQTTBridge::connectToBrokers() {
   // Check if MQTT configuration is valid before attempting connection
   if (!_config_valid) {
@@ -673,13 +694,25 @@ void MQTTBridge::connectToBrokers() {
       char client_id[32];
       snprintf(client_id, sizeof(client_id), "%s_%d_%lu", _origin, i, millis());
       
-      // Set broker URI and connect using PsychicMqttClient API
+      // Build broker URI based on transport/TLS prefs
       char broker_uri[128];
-      snprintf(broker_uri, sizeof(broker_uri), "mqtt://%s:%d", _brokers[i].host, _brokers[i].port);
+      buildBrokerURI(broker_uri, sizeof(broker_uri), _brokers[i].host, _brokers[i].port,
+                     _prefs->mqtt_tls, _prefs->mqtt_ws);
+      MQTT_DEBUG_PRINTLN("Broker URI: %s", broker_uri);
       _mqtt_client->setServer(broker_uri);
       
-      // Set credentials if provided
-      if (strlen(_brokers[i].username) > 0) {
+      // For WS+auth mode, use JWT token as password (same as LetsMesh pattern)
+      if (_prefs->mqtt_ws && strlen(_analyzer_username) > 0) {
+        // Generate token if not yet created or expired
+        if (_auth_token_custom[0] == '\0') {
+          MQTT_DEBUG_PRINTLN("Creating JWT token for custom broker audience: %s", _brokers[i].host);
+          JWTHelper::createAuthToken(*_identity, _brokers[i].host,
+              0, 86400, _auth_token_custom, sizeof(_auth_token_custom),
+              nullptr, nullptr, nullptr);
+        }
+        _mqtt_client->setCredentials(_analyzer_username, _auth_token_custom);
+        MQTT_DEBUG_PRINTLN("Using JWT auth for custom WS broker");
+      } else if (strlen(_brokers[i].username) > 0) {
         _mqtt_client->setCredentials(_brokers[i].username, _brokers[i].password);
       }
       
@@ -872,7 +905,7 @@ bool MQTTBridge::publishStatus() {
                   
                   // Set broker for this connection (PsychicMqttClient uses URI format)
                   char broker_uri[128];
-                  snprintf(broker_uri, sizeof(broker_uri), "mqtt://%s:%d", _brokers[i].host, _brokers[i].port);
+                  buildBrokerURI(broker_uri, sizeof(broker_uri), _brokers[i].host, _brokers[i].port, _prefs->mqtt_tls, _prefs->mqtt_ws);
                   _mqtt_client->setServer(broker_uri);
                   if (_mqtt_client->publish(topic, 1, true, json_buffer, strlen(json_buffer)) > 0) {
                     published = true;
@@ -986,7 +1019,7 @@ void MQTTBridge::publishPacket(mesh::Packet* packet, bool is_tx,
           
           // Set broker for this connection (PsychicMqttClient uses URI format)
           char broker_uri[128];
-          snprintf(broker_uri, sizeof(broker_uri), "mqtt://%s:%d", _brokers[i].host, _brokers[i].port);
+          buildBrokerURI(broker_uri, sizeof(broker_uri), _brokers[i].host, _brokers[i].port, _prefs->mqtt_tls, _prefs->mqtt_ws);
           _mqtt_client->setServer(broker_uri);
           _mqtt_client->publish(topic, 1, false, json_buffer, strlen(json_buffer)); // qos=1, retained=false
         }
@@ -1044,7 +1077,7 @@ void MQTTBridge::publishRaw(mesh::Packet* packet) {
           
           // Set broker for this connection (PsychicMqttClient uses URI format)
           char broker_uri[128];
-          snprintf(broker_uri, sizeof(broker_uri), "mqtt://%s:%d", _brokers[i].host, _brokers[i].port);
+          buildBrokerURI(broker_uri, sizeof(broker_uri), _brokers[i].host, _brokers[i].port, _prefs->mqtt_tls, _prefs->mqtt_ws);
           _mqtt_client->setServer(broker_uri);
           _mqtt_client->publish(topic, 1, false, json_buffer, strlen(json_buffer)); // qos=1, retained=false
         }

@@ -71,6 +71,8 @@ struct NodePrefs { // persisted to file
   uint16_t mqtt_port;       // MQTT server port
   char mqtt_username[32];   // MQTT username
   char mqtt_password[64];   // MQTT password
+  uint8_t mqtt_tls;         // Use TLS for custom broker (0=off, 1=on)
+  uint8_t mqtt_ws;          // Use WebSocket transport for custom broker (0=off, 1=on)
   
   // Let's Mesh Analyzer settings
   uint8_t mqtt_analyzer_us_enabled; // Enable US analyzer server
@@ -105,6 +107,8 @@ struct MQTTPrefs {
   uint16_t mqtt_port;       // MQTT server port
   char mqtt_username[32];   // MQTT username
   char mqtt_password[64];   // MQTT password
+  uint8_t mqtt_tls;         // Use TLS for custom broker (0=off, 1=on)
+  uint8_t mqtt_ws;          // Use WebSocket transport for custom broker (0=off, 1=on)
   
   // Let's Mesh Analyzer settings
   uint8_t mqtt_analyzer_us_enabled; // Enable US analyzer server

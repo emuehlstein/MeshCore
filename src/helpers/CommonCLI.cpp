@@ -606,6 +606,10 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, const char* command, ch
                 sprintf(reply, "> %s", _prefs->mqtt_username);
               } else if (memcmp(config, "mqtt.password", 13) == 0) {
                 sprintf(reply, "> %s", _prefs->mqtt_password);
+              } else if (memcmp(config, "mqtt.tls", 8) == 0) {
+                sprintf(reply, "> %s", _prefs->mqtt_tls ? "on" : "off");
+              } else if (memcmp(config, "mqtt.ws", 7) == 0) {
+                sprintf(reply, "> %s", _prefs->mqtt_ws ? "on" : "off");
               } else if (memcmp(config, "wifi.ssid", 9) == 0) {
                 sprintf(reply, "> %s", _prefs->wifi_ssid);
               } else if (memcmp(config, "wifi.pwd", 8) == 0) {
@@ -968,6 +972,14 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, const char* command, ch
                 strcpy(reply, "OK");
               } else if (memcmp(config, "mqtt.password ", 14) == 0) {
                 StrHelper::strncpy(_prefs->mqtt_password, &config[14], sizeof(_prefs->mqtt_password));
+                savePrefs();
+                strcpy(reply, "OK");
+              } else if (memcmp(config, "mqtt.tls ", 9) == 0) {
+                _prefs->mqtt_tls = memcmp(&config[9], "on", 2) == 0;
+                savePrefs();
+                strcpy(reply, "OK");
+              } else if (memcmp(config, "mqtt.ws ", 8) == 0) {
+                _prefs->mqtt_ws = memcmp(&config[8], "on", 2) == 0;
                 savePrefs();
                 strcpy(reply, "OK");
               } else if (memcmp(config, "mqtt.analyzer.us ", 17) == 0) {

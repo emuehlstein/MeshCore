@@ -123,6 +123,7 @@ private:
   char _auth_token_us[768]; // JWT token for US server authentication (increased for owner/client fields)
   char _auth_token_eu[768]; // JWT token for EU server authentication (increased for owner/client fields)
   char _analyzer_username[70]; // Username in format v1_{UPPERCASE_PUBLIC_KEY}
+  char _auth_token_custom[768]; // JWT token for custom broker (WS+TLS mode)
   
   // Token expiration tracking
   unsigned long _token_us_expires_at;
