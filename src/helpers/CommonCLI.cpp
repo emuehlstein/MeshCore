@@ -251,7 +251,15 @@ static void setMQTTPrefsDefaults(MQTTPrefs* prefs) {
   prefs->mqtt_tx_enabled = 0;        // disabled by default (RX only)
   prefs->mqtt_status_interval = 300000; // 5 minutes default
   prefs->mqtt_analyzer_us_enabled = 1; // enabled by default
-  prefs->mqtt_analyzer_eu_enabled = 1; // enabled by default
+  prefs->mqtt_analyzer_eu_enabled = 0; // disabled by default (Chicagoland build)
+
+  // Chicagoland defaults: Chicago Offline prod via WSS+JWT
+  strncpy(prefs->mqtt_server, "wsmqtt.chicagooffline.com", sizeof(prefs->mqtt_server) - 1);
+  prefs->mqtt_port = 443;
+  prefs->mqtt_tls = 1;
+  prefs->mqtt_ws = 1;
+  strncpy(prefs->mqtt_iata, "ORD", sizeof(prefs->mqtt_iata) - 1);
+
   prefs->wifi_power_save = 0; // Default to WIFI_PS_MIN_MODEM (0=min)
   // String fields are already zero-initialized by memset
 }
