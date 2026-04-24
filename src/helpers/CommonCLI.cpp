@@ -251,7 +251,7 @@ static void setMQTTPrefsDefaults(MQTTPrefs* prefs) {
   prefs->mqtt_tx_enabled = 0;        // disabled by default (RX only)
   prefs->mqtt_status_interval = 300000; // 5 minutes default
   prefs->mqtt_analyzer_us_enabled = 1; // enabled by default
-  prefs->mqtt_analyzer_eu_enabled = 0; // disabled by default (Chicagoland build)
+  prefs->mqtt_analyzer_eu_enabled = 1; // chimesh.org (replaces LetsMesh EU for Chicagoland build)
 
   // Chicagoland defaults: Chicago Offline prod via WSS+JWT
   strncpy(prefs->mqtt_server, "wsmqtt.chicagooffline.com", sizeof(prefs->mqtt_server) - 1);

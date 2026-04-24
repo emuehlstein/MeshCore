@@ -929,7 +929,7 @@ bool MQTTBridge::publishStatus() {
               if (_analyzer_eu_enabled && _analyzer_eu_client && _analyzer_eu_client->connected()) {
                 _analyzer_eu_client->publish(analyzer_topic, 1, true, json_buffer, strlen(json_buffer));
                 analyzer_published = true;
-                MQTT_DEBUG_PRINTLN("Published status to EU analyzer server");
+                MQTT_DEBUG_PRINTLN("Published status to chimesh.org analyzer server");
               }
               
               if (analyzer_published) {
@@ -1225,7 +1225,7 @@ void MQTTBridge::setupAnalyzerServers() {
   _analyzer_us_enabled = _prefs->mqtt_analyzer_us_enabled;
   _analyzer_eu_enabled = _prefs->mqtt_analyzer_eu_enabled;
   
-  MQTT_DEBUG_PRINTLN("Analyzer servers - US: %s, EU: %s", 
+  MQTT_DEBUG_PRINTLN("Analyzer servers - LetsMesh US: %s, chimesh.org: %s", 
                      _analyzer_us_enabled ? "enabled" : "disabled",
                      _analyzer_eu_enabled ? "enabled" : "disabled");
   
@@ -1299,17 +1299,17 @@ bool MQTTBridge::createAuthToken() {
     }
   }
   
-  // Create JWT token for EU server
+  // Create JWT token for chimesh.org server
   if (_analyzer_eu_enabled) {
-    MQTT_DEBUG_PRINTLN("Creating JWT token for EU server...");
+    MQTT_DEBUG_PRINTLN("Creating JWT token for chimesh.org server...");
     if (JWTHelper::createAuthToken(
-        *_identity, "mqtt-eu-v1.letsmesh.net", 
+        *_identity, "mqtt.chimesh.org", 
         0, expires_in, _auth_token_eu, sizeof(_auth_token_eu),
         owner_key, client_version, email)) {
-      MQTT_DEBUG_PRINTLN("Created auth token for EU server");
+      MQTT_DEBUG_PRINTLN("Created auth token for chimesh.org server");
       eu_token_created = true;
     } else {
-      MQTT_DEBUG_PRINTLN("Failed to create auth token for EU server");
+      MQTT_DEBUG_PRINTLN("Failed to create auth token for chimesh.org server");
     }
   }
   
@@ -1336,12 +1336,12 @@ void MQTTBridge::publishToAnalyzerServers(const char* topic, const char* payload
                       _analyzer_us_enabled ? "true" : "false", _analyzer_us_client ? "exists" : "null");
   }
   
-  // Publish to EU server if enabled
+  // Publish to chimesh.org server if enabled
   if (_analyzer_eu_enabled && _analyzer_eu_client) {
-    MQTT_DEBUG_PRINTLN("Publishing to EU analyzer server");
+    MQTT_DEBUG_PRINTLN("Publishing to chimesh.org analyzer server");
     publishToAnalyzerClient(_analyzer_eu_client, topic, payload, retained);
   } else {
-    MQTT_DEBUG_PRINTLN("EU analyzer server not available (enabled: %s, client: %s)", 
+    MQTT_DEBUG_PRINTLN("chimesh.org analyzer server not available (enabled: %s, client: %s)", 
                       _analyzer_eu_enabled ? "true" : "false", _analyzer_eu_client ? "exists" : "null");
   }
 }
@@ -1422,45 +1422,45 @@ void MQTTBridge::setupAnalyzerClients() {
     }
   }
 
-  // Setup EU server client
+  // Setup chimesh.org server client
   if (_analyzer_eu_enabled) {
     _analyzer_eu_client = new PsychicMqttClient();
 
-    // Set up event callbacks for EU server
+    // Set up event callbacks for chimesh.org server
     _analyzer_eu_client->onConnect([this](bool sessionPresent) {
-      MQTT_DEBUG_PRINTLN("Connected to Let's Mesh EU server, session present: %s", sessionPresent ? "true" : "false");
+      MQTT_DEBUG_PRINTLN("Connected to chimesh.org server, session present: %s", sessionPresent ? "true" : "false");
       // Publish status message when connected
-      publishStatusToAnalyzerClient(_analyzer_eu_client, "mqtt-eu-v1.letsmesh.net");
+      publishStatusToAnalyzerClient(_analyzer_eu_client, "mqtt.chimesh.org");
     });
 
     _analyzer_eu_client->onDisconnect([this](bool sessionPresent) {
-      MQTT_DEBUG_PRINTLN("Disconnected from Let's Mesh EU server, session present: %s", sessionPresent ? "true" : "false");
+      MQTT_DEBUG_PRINTLN("Disconnected from chimesh.org server, session present: %s", sessionPresent ? "true" : "false");
     });
 
             _analyzer_eu_client->onError([this](esp_mqtt_error_codes error) {
-              MQTT_DEBUG_PRINTLN("Let's Mesh EU server error - error_type: %d, connect_return_code: %d, sock_errno: %d", 
+              MQTT_DEBUG_PRINTLN("chimesh.org server error - error_type: %d, connect_return_code: %d, sock_errno: %d", 
                                 error.error_type, error.connect_return_code, error.esp_transport_sock_errno);
             });
 
-    // Set up WebSocket MQTT over TLS connection to EU server
-    _analyzer_eu_client->setServer("wss://mqtt-eu-v1.letsmesh.net:443/mqtt");
+    // Set up WebSocket MQTT over TLS connection to chimesh.org server
+    _analyzer_eu_client->setServer("wss://mqtt.chimesh.org:443/mqtt");
     MQTT_DEBUG_PRINTLN("EU Server - Username: %s", _analyzer_username);
     MQTT_DEBUG_PRINTLN("EU Server - Auth token length: %d", strlen(_auth_token_eu));
     MQTT_DEBUG_PRINTLN("EU Server - Auth token (first 50 chars): %.50s...", _auth_token_eu);
     _analyzer_eu_client->setCredentials(_analyzer_username, _auth_token_eu);
 
     // Configure TLS - use specific GTS Root R4 certificate
-    MQTT_DEBUG_PRINTLN("Using GTS Root R4 certificate for EU server");
+    MQTT_DEBUG_PRINTLN("Using GTS Root R4 certificate for chimesh.org server");
     _analyzer_eu_client->setCACert(GTS_ROOT_R4);
 
     // Only attempt connection if WiFi is connected and NTP is synced
     // Otherwise, maintainAnalyzerConnections() will handle it later
     if (WiFi.status() == WL_CONNECTED && _ntp_synced) {
-      // Connect to EU server (async connection)
+      // Connect to chimesh.org server (async connection)
       _analyzer_eu_client->connect();
-      MQTT_DEBUG_PRINTLN("Initiating connection to Let's Mesh EU server");
+      MQTT_DEBUG_PRINTLN("Initiating connection to chimesh.org server");
     } else {
-      MQTT_DEBUG_PRINTLN("Deferring EU server connection - WiFi: %s, NTP: %s", 
+      MQTT_DEBUG_PRINTLN("Deferring chimesh.org server connection - WiFi: %s, NTP: %s", 
                         (WiFi.status() == WL_CONNECTED) ? "connected" : "disconnected",
                         _ntp_synced ? "synced" : "not synced");
     }
@@ -1764,7 +1764,7 @@ void MQTTBridge::maintainAnalyzerConnections() {
     }
   }
   
-  // Check and renew EU server token if needed
+  // Check and renew chimesh.org server token if needed
   if (_analyzer_eu_enabled && _analyzer_eu_client) {
     // Check if token is expired or will expire soon
     // Only check expiration if time is synced - if time isn't synced, we can't validate expiration
@@ -1790,7 +1790,7 @@ void MQTTBridge::maintainAnalyzerConnections() {
     
     if (token_needs_renewal && can_attempt_renewal) {
       _last_token_renewal_attempt_eu = now_millis;
-      MQTT_DEBUG_PRINTLN("EU token expired or expiring soon (expires_at: %lu, current: %lu), renewing...", 
+      MQTT_DEBUG_PRINTLN("chimesh.org token expired or expiring soon (expires_at: %lu, current: %lu), renewing...", 
                          _token_eu_expires_at, current_time);
       
       // Prepare owner public key (if set) - convert to uppercase hex
@@ -1818,17 +1818,17 @@ void MQTTBridge::maintainAnalyzerConnections() {
       
       // Renew the token
       if (JWTHelper::createAuthToken(
-          *_identity, "mqtt-eu-v1.letsmesh.net", 
+          *_identity, "mqtt.chimesh.org", 
           0, 86400, _auth_token_eu, sizeof(_auth_token_eu),
           owner_key, client_version, email)) {
         unsigned long expires_in = 86400; // 24 hours
         // Only set expiration time if time is synced - otherwise set to 0 to indicate it needs to be set later
         if (time_synced) {
           _token_eu_expires_at = current_time + expires_in;
-          MQTT_DEBUG_PRINTLN("EU token renewed, new expiration: %lu", _token_eu_expires_at);
+          MQTT_DEBUG_PRINTLN("chimesh.org token renewed, new expiration: %lu", _token_eu_expires_at);
         } else {
           _token_eu_expires_at = 0; // Will be set properly after time sync
-          MQTT_DEBUG_PRINTLN("EU token renewed, expiration will be set after time sync");
+          MQTT_DEBUG_PRINTLN("chimesh.org token renewed, expiration will be set after time sync");
         }
         
         // Update client credentials with new token
@@ -1837,14 +1837,14 @@ void MQTTBridge::maintainAnalyzerConnections() {
         // Reconnect to apply new token (whether currently connected or not)
         // If connected, disconnect first to ensure new token is used
         if (_analyzer_eu_client->connected()) {
-          MQTT_DEBUG_PRINTLN("Disconnecting EU server to apply new token...");
+          MQTT_DEBUG_PRINTLN("Disconnecting chimesh.org server to apply new token...");
           _analyzer_eu_client->disconnect();
         }
-        MQTT_DEBUG_PRINTLN("Reconnecting to EU server with renewed token...");
+        MQTT_DEBUG_PRINTLN("Reconnecting to chimesh.org server with renewed token...");
         _last_reconnect_attempt_eu = now_millis; // Update reconnect timestamp to throttle subsequent attempts
         _analyzer_eu_client->connect();
       } else {
-        MQTT_DEBUG_PRINTLN("Failed to renew EU token");
+        MQTT_DEBUG_PRINTLN("Failed to renew chimesh.org token");
         _token_eu_expires_at = 0;
       }
     } else if (needs_reconnect) {
@@ -1855,13 +1855,13 @@ void MQTTBridge::maintainAnalyzerConnections() {
                                       (ULONG_MAX - _last_reconnect_attempt_eu + now_millis + 1);
       if (reconnect_elapsed >= RECONNECT_THROTTLE_MS) {
         _last_reconnect_attempt_eu = now_millis;
-        MQTT_DEBUG_PRINTLN("EU server disconnected but token still valid, reconnecting...");
+        MQTT_DEBUG_PRINTLN("chimesh.org server disconnected but token still valid, reconnecting...");
         _analyzer_eu_client->connect();
       } else {
         // Throttled - only log periodically to avoid spam (every 5 minutes max)
         static unsigned long last_throttle_log_eu = 0;
         if (now_millis - last_throttle_log_eu > 300000) {
-          MQTT_DEBUG_PRINTLN("EU server reconnection throttled (last attempt %lu ms ago, need %lu ms)", 
+          MQTT_DEBUG_PRINTLN("chimesh.org server reconnection throttled (last attempt %lu ms ago, need %lu ms)", 
                             reconnect_elapsed, RECONNECT_THROTTLE_MS);
           last_throttle_log_eu = now_millis;
         }
