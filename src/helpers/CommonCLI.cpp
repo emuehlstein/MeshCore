@@ -376,6 +376,8 @@ void CommonCLI::syncMQTTPrefsToNodePrefs() {
   _prefs->mqtt_port = _mqtt_prefs.mqtt_port;
   StrHelper::strncpy(_prefs->mqtt_username, _mqtt_prefs.mqtt_username, sizeof(_prefs->mqtt_username));
   StrHelper::strncpy(_prefs->mqtt_password, _mqtt_prefs.mqtt_password, sizeof(_prefs->mqtt_password));
+  _prefs->mqtt_tls = _mqtt_prefs.mqtt_tls;
+  _prefs->mqtt_ws = _mqtt_prefs.mqtt_ws;
   _prefs->mqtt_analyzer_us_enabled = _mqtt_prefs.mqtt_analyzer_us_enabled;
   _prefs->mqtt_analyzer_eu_enabled = _mqtt_prefs.mqtt_analyzer_eu_enabled;
   StrHelper::strncpy(_prefs->mqtt_owner_public_key, _mqtt_prefs.mqtt_owner_public_key, sizeof(_prefs->mqtt_owner_public_key));
@@ -401,6 +403,8 @@ void CommonCLI::syncNodePrefsToMQTTPrefs() {
   _mqtt_prefs.mqtt_port = _prefs->mqtt_port;
   StrHelper::strncpy(_mqtt_prefs.mqtt_username, _prefs->mqtt_username, sizeof(_mqtt_prefs.mqtt_username));
   StrHelper::strncpy(_mqtt_prefs.mqtt_password, _prefs->mqtt_password, sizeof(_mqtt_prefs.mqtt_password));
+  _mqtt_prefs.mqtt_tls = _prefs->mqtt_tls;
+  _mqtt_prefs.mqtt_ws = _prefs->mqtt_ws;
   _mqtt_prefs.mqtt_analyzer_us_enabled = _prefs->mqtt_analyzer_us_enabled;
   _mqtt_prefs.mqtt_analyzer_eu_enabled = _prefs->mqtt_analyzer_eu_enabled;
   StrHelper::strncpy(_mqtt_prefs.mqtt_owner_public_key, _prefs->mqtt_owner_public_key, sizeof(_mqtt_prefs.mqtt_owner_public_key));
