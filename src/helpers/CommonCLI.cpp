@@ -117,6 +117,12 @@ void CommonCLI::loadPrefs(FILESYSTEM* fs) {
     // File doesn't exist - set default bridge settings for fresh installs
     is_fresh_install = true;
     _prefs->bridge_pkt_src = 1;  // Default to RX (logRx) for new installs
+#ifdef DEFAULT_PATH_HASH_MODE
+    _prefs->path_hash_mode = DEFAULT_PATH_HASH_MODE;
+#endif
+#ifdef DEFAULT_LOOP_DETECT
+    _prefs->loop_detect = DEFAULT_LOOP_DETECT;
+#endif
   }
 #ifdef WITH_MQTT_BRIDGE
   // Load MQTT preferences from separate file
@@ -364,20 +370,38 @@ static void setMQTTPrefsDefaults(MQTTPrefs* prefs) {
   prefs->mqtt_status_enabled = 1;    // enabled by default
   prefs->mqtt_packets_enabled = 1;   // enabled by default
   prefs->mqtt_raw_enabled = 0;       // disabled by default
-  prefs->mqtt_tx_enabled = 0;        // disabled by default
+  prefs->mqtt_tx_enabled = 0;        // disabled by default (mqtt.rx handles RF→MQTT reporting)
   prefs->mqtt_rx_enabled = 1;        // RX packets enabled by default
   prefs->mqtt_status_interval = 300000; // 5 minutes default
   // Slot presets: defaults depend on build config
+#ifdef DEFAULT_MQTT_SLOT0_PRESET
+  strncpy(prefs->mqtt_slot_preset[0], DEFAULT_MQTT_SLOT0_PRESET, sizeof(prefs->mqtt_slot_preset[0]) - 1);
+#else
   strncpy(prefs->mqtt_slot_preset[0], "analyzer-us", sizeof(prefs->mqtt_slot_preset[0]) - 1);
+#endif
   prefs->mqtt_slot_preset[0][sizeof(prefs->mqtt_slot_preset[0]) - 1] = '\0';
+#ifdef DEFAULT_MQTT_SLOT1_PRESET
+  strncpy(prefs->mqtt_slot_preset[1], DEFAULT_MQTT_SLOT1_PRESET, sizeof(prefs->mqtt_slot_preset[1]) - 1);
+#else
   strncpy(prefs->mqtt_slot_preset[1], "chimesh", sizeof(prefs->mqtt_slot_preset[1]) - 1);
+#endif
   prefs->mqtt_slot_preset[1][sizeof(prefs->mqtt_slot_preset[1]) - 1] = '\0';
+#ifdef DEFAULT_MQTT_SLOT2_PRESET
+  strncpy(prefs->mqtt_slot_preset[2], DEFAULT_MQTT_SLOT2_PRESET, sizeof(prefs->mqtt_slot_preset[2]) - 1);
+#else
   strncpy(prefs->mqtt_slot_preset[2], "chioff", sizeof(prefs->mqtt_slot_preset[2]) - 1);
+#endif
   prefs->mqtt_slot_preset[2][sizeof(prefs->mqtt_slot_preset[2]) - 1] = '\0';
 #ifdef DEFAULT_MQTT_SLOT3_PRESET
   strncpy(prefs->mqtt_slot_preset[3], DEFAULT_MQTT_SLOT3_PRESET, sizeof(prefs->mqtt_slot_preset[3]) - 1);
   prefs->mqtt_slot_preset[3][sizeof(prefs->mqtt_slot_preset[3]) - 1] = '\0';
+#ifdef DEFAULT_MQTT_SLOT4_PRESET
+  strncpy(prefs->mqtt_slot_preset[4], DEFAULT_MQTT_SLOT4_PRESET, sizeof(prefs->mqtt_slot_preset[4]) - 1);
+  prefs->mqtt_slot_preset[4][sizeof(prefs->mqtt_slot_preset[4]) - 1] = '\0';
+  for (int i = 5; i < MAX_MQTT_SLOTS; i++) {
+#else
   for (int i = 4; i < MAX_MQTT_SLOTS; i++) {
+#endif
 #else
   for (int i = 3; i < MAX_MQTT_SLOTS; i++) {
 #endif
