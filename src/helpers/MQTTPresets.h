@@ -99,7 +99,7 @@ static const char ISRG_ROOT_X1[] PROGMEM =
     "-----END CERTIFICATE-----\n";
 
 // Number of built-in presets
-static const int MQTT_PRESET_COUNT = 12;
+static const int MQTT_PRESET_COUNT = 13;
 
 // Built-in preset definitions (stored in flash)
 static const MQTTPresetDef MQTT_PRESETS[MQTT_PRESET_COUNT] = {
@@ -113,7 +113,8 @@ static const MQTTPresetDef MQTT_PRESETS[MQTT_PRESET_COUNT] = {
   { "tennmesh",     "mqtt://mqtt.tennmesh.com:1883",           nullptr,                    nullptr,      MQTT_AUTH_USERPASS, MQTT_TOPIC_MESHCORE, 0,    true,  55, "mqttfeed", "tc2live" },
   { "nashmesh",     "mqtt://mqtt.nashme.sh:1883",              nullptr,                    nullptr,      MQTT_AUTH_USERPASS, MQTT_TOPIC_MESHCORE, 0,    true,  55, "meshdev",  "large4cats" },
   { "chimesh",      "wss://mqtt.chimesh.org:443",              "mqtt.chimesh.org",         ISRG_ROOT_X1, MQTT_AUTH_JWT,      MQTT_TOPIC_MESHCORE, 0,    true,  55, nullptr,    nullptr },
-  { "chioff",       "wss://wsmqtt.chicagooffline.com:443/mqtt", "wsmqtt.chicagooffline.com", ISRG_ROOT_X1, MQTT_AUTH_JWT,      MQTT_TOPIC_MESHCORE, 0,    true,  55, nullptr,    nullptr },
+  { "chioff",       "wss://wsmqtt.chicagooffline.com:443/mqtt",     "wsmqtt.chicagooffline.com",     ISRG_ROOT_X1, MQTT_AUTH_JWT,      MQTT_TOPIC_MESHCORE, 0,    true,  55, nullptr,    nullptr },
+  { "chioff-dev",   "wss://wsmqtt-dev.chicagooffline.com:443/mqtt", "wsmqtt-dev.chicagooffline.com", ISRG_ROOT_X1, MQTT_AUTH_JWT,      MQTT_TOPIC_MESHCORE, 0,    true,  55, nullptr,    nullptr },
   { "meshat.se",    "mqtts://mqtt.meshat.se:8883",             nullptr,                    ISRG_ROOT_X1, MQTT_AUTH_USERPASS, MQTT_TOPIC_MESHCORE, 0,    true,  55, "msh",      "msh" },
 };
 

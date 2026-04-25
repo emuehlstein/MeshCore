@@ -367,14 +367,20 @@ static void setMQTTPrefsDefaults(MQTTPrefs* prefs) {
   prefs->mqtt_tx_enabled = 0;        // disabled by default
   prefs->mqtt_rx_enabled = 1;        // RX packets enabled by default
   prefs->mqtt_status_interval = 300000; // 5 minutes default
-  // Slot presets: analyzer-us, chimesh, chioff enabled by default, rest = none
+  // Slot presets: defaults depend on build config
   strncpy(prefs->mqtt_slot_preset[0], "analyzer-us", sizeof(prefs->mqtt_slot_preset[0]) - 1);
   prefs->mqtt_slot_preset[0][sizeof(prefs->mqtt_slot_preset[0]) - 1] = '\0';
   strncpy(prefs->mqtt_slot_preset[1], "chimesh", sizeof(prefs->mqtt_slot_preset[1]) - 1);
   prefs->mqtt_slot_preset[1][sizeof(prefs->mqtt_slot_preset[1]) - 1] = '\0';
   strncpy(prefs->mqtt_slot_preset[2], "chioff", sizeof(prefs->mqtt_slot_preset[2]) - 1);
   prefs->mqtt_slot_preset[2][sizeof(prefs->mqtt_slot_preset[2]) - 1] = '\0';
+#ifdef DEFAULT_MQTT_SLOT3_PRESET
+  strncpy(prefs->mqtt_slot_preset[3], DEFAULT_MQTT_SLOT3_PRESET, sizeof(prefs->mqtt_slot_preset[3]) - 1);
+  prefs->mqtt_slot_preset[3][sizeof(prefs->mqtt_slot_preset[3]) - 1] = '\0';
+  for (int i = 4; i < MAX_MQTT_SLOTS; i++) {
+#else
   for (int i = 3; i < MAX_MQTT_SLOTS; i++) {
+#endif
     strncpy(prefs->mqtt_slot_preset[i], "none", sizeof(prefs->mqtt_slot_preset[i]) - 1);
     prefs->mqtt_slot_preset[i][sizeof(prefs->mqtt_slot_preset[i]) - 1] = '\0';
   }
@@ -1366,7 +1372,7 @@ void CommonCLI::handleSetCmd(uint32_t sender_timestamp, char* command, char* rep
           }
         }
       } else {
-        strcpy(reply, "Error: valid presets are: analyzer-us, analyzer-eu, meshmapper, meshrank, waev, meshomatic, cascadiamesh, tennmesh, nashmesh, chimesh, chioff, custom, none");
+        strcpy(reply, "Error: valid presets are: analyzer-us, analyzer-eu, meshmapper, meshrank, waev, meshomatic, cascadiamesh, tennmesh, nashmesh, chimesh, chioff, chioff-dev, custom, none");
       }
     } else if (memcmp(subcmd, "server ", 7) == 0) {
       StrHelper::strncpy(_prefs->mqtt_slot_host[slot], &subcmd[7], sizeof(_prefs->mqtt_slot_host[slot]));
