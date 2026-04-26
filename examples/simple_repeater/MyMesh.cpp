@@ -938,8 +938,19 @@ MyMesh::MyMesh(mesh::MainBoard &board, mesh::Radio &radio, mesh::MillisecondCloc
   _prefs.bw = LORA_BW;
   _prefs.cr = LORA_CR;
   _prefs.tx_power_dbm = LORA_TX_POWER;
+#ifdef DEFAULT_ADVERT_INTERVAL
+  _prefs.advert_interval = DEFAULT_ADVERT_INTERVAL;  // stored as mins/2
+#else
   _prefs.advert_interval = 1;        // default to 2 minutes for NEW installs
+#endif
+#ifdef DEFAULT_FLOOD_ADVERT_INTERVAL
+  _prefs.flood_advert_interval = DEFAULT_FLOOD_ADVERT_INTERVAL;
+#else
   _prefs.flood_advert_interval = 12; // 12 hours
+#endif
+#ifdef DEFAULT_REPEAT_OFF
+  _prefs.disable_fwd = true;
+#endif
   _prefs.flood_max = 64;
   _prefs.interference_threshold = 0; // disabled
 #ifdef WITH_MQTT_BRIDGE
