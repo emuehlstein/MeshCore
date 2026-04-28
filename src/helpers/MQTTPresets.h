@@ -116,6 +116,8 @@ static const MQTTPresetDef MQTT_PRESETS[MQTT_PRESET_COUNT] = {
   { "chioff",       "wss://wsmqtt.chicagooffline.com:443/mqtt",     "wsmqtt.chicagooffline.com",     ISRG_ROOT_X1, MQTT_AUTH_JWT,      MQTT_TOPIC_MESHCORE, 0,    true,  55, nullptr,    nullptr },
   { "chioff-dev",   "wss://wsmqtt-dev.chicagooffline.com:443/mqtt", "wsmqtt-dev.chicagooffline.com", ISRG_ROOT_X1, MQTT_AUTH_JWT,      MQTT_TOPIC_MESHCORE, 0,    true,  55, nullptr,    nullptr },
   { "meshat.se",    "mqtts://mqtt.meshat.se:8883",             nullptr,                    ISRG_ROOT_X1, MQTT_AUTH_USERPASS, MQTT_TOPIC_MESHCORE, 0,    true,  55, "msh",      "msh" },
+  { "eastidahomesh","wss://broker.eastidahomesh.net:443",      nullptr,                    ISRG_ROOT_X1, MQTT_AUTH_NONE,     MQTT_TOPIC_MESHCORE, 0,    true,  55, nullptr,    nullptr },
+  { "coloradomesh", "mqtt://mqtt.meshcore.coloradomesh.org:8883","mqtt.meshcore.coloradomesh.org", nullptr,      MQTT_AUTH_JWT,      MQTT_TOPIC_MESHCORE, 0,    true,  55, nullptr,    nullptr },
 };
 
 // Find a preset by name, returns nullptr if not found
