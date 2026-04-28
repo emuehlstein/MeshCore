@@ -232,9 +232,29 @@ build_room_server_firmwares() {
 
 build_chicagoland_firmwares() {
 
-  # Build all observer MQTT firmwares (chicagoland defaults baked in)
-  # Suffix matches: *_repeater_observer_mqtt, *_dedicated_observer_mqtt, *_room_server_observer_mqtt
-  build_all_firmwares_by_suffix "_observer_mqtt"
+  # Build observer MQTT firmwares for boards with chicagoland defaults baked in.
+  # Only include boards that have radio preset (910.525/BW62.5/SF7) and MQTT slot defaults configured.
+  # Boards without chicagoland defaults (T-Beam, T3S3, RAK3112, T190, XIAO S3) are excluded until
+  # their variant platformio.ini files are updated with the appropriate defaults.
+
+  # Heltec V3 / WSL3 (no PSRAM, 2 slots: analyzer-us + chimesh)
+  build_firmware "Heltec_v3_repeater_observer_mqtt"
+  build_firmware "Heltec_v3_dedicated_observer_mqtt"
+  build_firmware "Heltec_v3_room_server_observer_mqtt"
+  build_firmware "Heltec_WSL3_repeater_observer_mqtt"
+  build_firmware "Heltec_WSL3_dedicated_observer_mqtt"
+
+  # Heltec V4 / V4 Expansion Kit (PSRAM, 3 slots: analyzer-us + chimesh + chioff)
+  build_firmware "heltec_v4_repeater_observer_mqtt"
+  build_firmware "heltec_v4_dedicated_observer_mqtt"
+  build_firmware "heltec_v4_room_server_observer_mqtt"
+  build_firmware "heltec_v4_expansionkit_repeater_observer_mqtt"
+  build_firmware "heltec_v4_expansionkit_room_server_observer_mqtt"
+
+  # Station G2 (PSRAM, 5 slots: chimesh + chioff + analyzer-us + analyzer-eu + chioff-dev)
+  build_firmware "Station_G2_repeater_observer_mqtt"
+  build_firmware "Station_G2_dedicated_observer_mqtt"
+  build_firmware "Station_G2_room_server_observer_mqtt"
 
 }
 
