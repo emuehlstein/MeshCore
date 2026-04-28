@@ -1,0 +1,55 @@
+name: Build Chicagoland Firmwares
+
+permissions:
+  contents: write
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'chicagoland-*'
+
+jobs:
+
+  build:
+    runs-on: ubuntu-latest
+    steps:
+
+      - name: Clone Repo
+        uses: actions/checkout@v4
+
+      - name: Setup Build Environment
+        uses: ./.github/actions/setup-build-environment
+
+      - name: Build Firmwares
+        env:
+          FIRMWARE_VERSION: ${{ env.GIT_TAG_VERSION }}
+        run: /usr/bin/env bash build.sh build-chicagoland-firmwares
+
+      - name: Upload Workflow Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: chicagoland-firmwares
+          path: out
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          name: Chicagoland Firmware ${{ env.GIT_TAG_VERSION }}
+          body: |
+            Chicagoland MeshCore firmware with Chicago-area defaults pre-configured:
+            - MQTT broker: mqtt.chicagooffline.com
+            - Radio preset: US Standard (910.525 MHz / BW 62.5 / SF 7 / CR 5)
+
+            ## Flashing
+            Use the `*-merged.bin` files with the MeshCore web flasher (custom firmware option).
+            Merged binaries include bootloader + partition table + app — safe to use with "erase device" enabled.
+
+            ## Firmware variants
+            Each supported hardware target includes:
+            - `*_repeater_observer_mqtt` — Repeater + MQTT observer
+            - `*_dedicated_observer_mqtt` — Dedicated observer (no routing)
+            - `*_room_server_observer_mqtt` — Room server + MQTT observer
+          draft: true
+          files: out/*

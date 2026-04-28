@@ -17,6 +17,7 @@ Commands:
   build-companion-firmwares: Build all companion firmwares for all build targets.
   build-repeater-firmwares: Build all repeater firmwares for all build targets.
   build-room-server-firmwares: Build all chat room server firmwares for all build targets.
+  build-chicagoland-firmwares: Build all chicagoland observer MQTT firmwares (merged binaries included).
 
 Examples:
 Build firmware for the "RAK_4631_repeater" device target
@@ -229,6 +230,14 @@ build_room_server_firmwares() {
 
 }
 
+build_chicagoland_firmwares() {
+
+  # Build all observer MQTT firmwares (chicagoland defaults baked in)
+  # Suffix matches: *_repeater_observer_mqtt, *_dedicated_observer_mqtt, *_room_server_observer_mqtt
+  build_all_firmwares_by_suffix "_observer_mqtt"
+
+}
+
 build_firmwares() {
   build_companion_firmwares
   build_repeater_firmwares
@@ -265,4 +274,6 @@ elif [[ $1 == "build-repeater-firmwares" ]]; then
   build_repeater_firmwares
 elif [[ $1 == "build-room-server-firmwares" ]]; then
   build_room_server_firmwares
+elif [[ $1 == "build-chicagoland-firmwares" ]]; then
+  build_chicagoland_firmwares
 fi
