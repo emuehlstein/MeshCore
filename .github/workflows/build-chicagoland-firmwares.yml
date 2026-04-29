@@ -9,6 +9,11 @@ on:
     tags:
       - 'chicagoland-*'
 
+env:
+  # Upstream MeshCore version this fork is based on.
+  # Update this when rebasing on a new upstream release.
+  MESHCORE_BASE_VERSION: "1.15.0"
+
 jobs:
 
   build:
@@ -21,9 +26,21 @@ jobs:
       - name: Setup Build Environment
         uses: ./.github/actions/setup-build-environment
 
+      - name: Compose Firmware Version
+        shell: bash
+        run: |
+          # Tag: "chicagoland-v0.5.2" → suffix: "0.5.2"
+          TAG_NAME="${GITHUB_REF#refs/tags/}"
+          TAG_SUFFIX="${TAG_NAME#chicagoland-v}"
+          # For workflow_dispatch (no tag), fall back to short SHA
+          if [ "$TAG_SUFFIX" = "$TAG_NAME" ] || [ -z "$TAG_SUFFIX" ]; then
+            TAG_SUFFIX="dev"
+          fi
+          echo "CHIOFF_VERSION=v${MESHCORE_BASE_VERSION}-chioff-${TAG_SUFFIX}" >> $GITHUB_ENV
+
       - name: Build Firmwares
         env:
-          FIRMWARE_VERSION: ${{ env.GIT_TAG_VERSION }}
+          FIRMWARE_VERSION: ${{ env.CHIOFF_VERSION }}
         run: /usr/bin/env bash build.sh build-chicagoland-firmwares
 
       - name: Upload Workflow Artifacts
@@ -36,7 +53,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/tags/')
         with:
-          name: Chicagoland Firmware ${{ env.GIT_TAG_VERSION }}
+          name: Chicagoland Firmware ${{ env.CHIOFF_VERSION }}
           body: |
             Chicagoland MeshCore firmware with Chicago-area defaults pre-configured:
             - MQTT broker: mqtt.chicagooffline.com
