@@ -429,6 +429,10 @@ static void setMQTTPrefsDefaults(MQTTPrefs* prefs) {
   prefs->mqtt_tx_enabled = 2;        // advert: own adverts only, by default
   prefs->mqtt_rx_enabled = 1;        // RX packets enabled by default
   prefs->mqtt_status_interval = 300000; // 5 minutes default
+#ifdef DEFAULT_MQTT_IATA
+  strncpy(prefs->mqtt_iata, DEFAULT_MQTT_IATA, sizeof(prefs->mqtt_iata) - 1);
+  prefs->mqtt_iata[sizeof(prefs->mqtt_iata) - 1] = '\0';
+#endif
   // Slot presets: defaults depend on build config
 #ifdef DEFAULT_MQTT_SLOT0_PRESET
   strncpy(prefs->mqtt_slot_preset[0], DEFAULT_MQTT_SLOT0_PRESET, sizeof(prefs->mqtt_slot_preset[0]) - 1);
