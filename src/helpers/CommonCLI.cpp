@@ -465,6 +465,10 @@ static void setMQTTPrefsDefaults(MQTTPrefs* prefs) {
     prefs->mqtt_slot_preset[i][sizeof(prefs->mqtt_slot_preset[i]) - 1] = '\0';
   }
   prefs->wifi_power_save = 1; // Default to none (0=min, 1=none, 2=max)
+#ifdef DEFAULT_MQTT_IATA
+  strncpy(prefs->mqtt_iata, DEFAULT_MQTT_IATA, sizeof(prefs->mqtt_iata) - 1);
+  prefs->mqtt_iata[sizeof(prefs->mqtt_iata) - 1] = '\0';
+#endif
   // String fields are already zero-initialized by memset
 }
 
