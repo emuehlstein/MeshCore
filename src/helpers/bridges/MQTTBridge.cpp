@@ -4,6 +4,7 @@
 #include <NTPClient.h>
 #include <WiFiUdp.h>
 #include <Timezone.h>
+#include <time.h>
 
 #ifdef WITH_SNMP
 #include "../SNMPAgent.h"
@@ -197,6 +198,25 @@ void MQTTBridge::formatMqttStatusReply(char* buf, size_t bufsize, const NodePref
 
 uint8_t MQTTBridge::getLastWifiDisconnectReason() { return s_wifi_disconnect_reason; }
 unsigned long MQTTBridge::getLastWifiDisconnectTime() { return s_wifi_disconnect_time; }
+
+unsigned long MQTTBridge::getSlotCurrentOutageStartMs(int slot_index) const {
+  if (slot_index < 0 || slot_index >= RUNTIME_MQTT_SLOTS) return 0;
+  return _slots[slot_index].current_outage_started_ms;
+}
+
+bool MQTTBridge::isSlotEnabledAndAttempted(int slot_index) const {
+  if (slot_index < 0 || slot_index >= RUNTIME_MQTT_SLOTS) return false;
+  const MQTTSlot& s = _slots[slot_index];
+  return s.enabled && s.initial_connect_done;
+}
+
+const char* MQTTBridge::getSlotPresetName(int slot_index) const {
+  if (slot_index < 0 || slot_index >= RUNTIME_MQTT_SLOTS) return "?";
+  const MQTTSlot& s = _slots[slot_index];
+  if (s.preset && s.preset->name) return s.preset->name;
+  if (!s.enabled) return MQTT_PRESET_NONE;
+  return MQTT_PRESET_CUSTOM;
+}
 
 const char* MQTTBridge::wifiReasonStr(uint8_t reason) {
   switch (reason) {
@@ -997,6 +1017,7 @@ void MQTTBridge::initSlotClients() {
       _slots[index].last_tls_stack_err = 0;
       _slots[index].last_sock_errno = 0;
       _slots[index].last_error_time = 0;
+      _slots[index].current_outage_started_ms = 0;  // clear current-outage timer for AlertReporter
       updateCachedConnectionStatus();
       publishStatusToSlot(index);
     });
@@ -1005,6 +1026,9 @@ void MQTTBridge::initSlotClients() {
       _slots[index].disconnect_count++;
       if (_slots[index].first_disconnect_time == 0) {
         _slots[index].first_disconnect_time = millis();
+      }
+      if (_slots[index].current_outage_started_ms == 0) {
+        _slots[index].current_outage_started_ms = millis();
       }
       _slots[index].connected = false;
       updateCachedConnectionStatus();
@@ -1665,20 +1689,20 @@ void MQTTBridge::publishStatusToSlot(int index) {
 
   // Reuse pre-allocated buffer to avoid heap alloc/free churn under memory pressure.
   // _status_json_buffer and _last_raw_data are both Core 0-owned; no mutex needed.
+  #if defined(BOARD_HAS_PSRAM)
   char fallback_status_buffer[STATUS_JSON_BUFFER_SIZE];
   char* json_buffer = (_status_json_buffer != nullptr) ? _status_json_buffer : fallback_status_buffer;
+  #else
+  char* json_buffer = _status_json_buffer;
+  #endif
 
   char origin_id[65];
   char timestamp[32];
   char radio_info[64];
 
-  // Get current timestamp in ISO 8601 format
-  struct tm timeinfo;
-  if (getLocalTime(&timeinfo)) {
-    strftime(timestamp, sizeof(timestamp), "%Y-%m-%dT%H:%M:%S.000000", &timeinfo);
-  } else {
-    strcpy(timestamp, "2024-01-01T12:00:00.000000");
-  }
+  // Status timestamp: same prefs-based wall clock as packet/raw JSON `timestamp`
+  // (not libc getLocalTime — SNTP uses UTC offset 0; prefs Timezone is separate).
+  MQTTMessageBuilder::formatIsoTimestampForMqtt(time(nullptr), _timezone, timestamp, sizeof(timestamp));
 
   snprintf(radio_info, sizeof(radio_info), "%.6f,%.1f,%d,%d",
            _prefs->freq, _prefs->bw, _prefs->sf, _prefs->cr);
@@ -2356,19 +2380,19 @@ bool MQTTBridge::publishStatus() {
 
   // Reuse pre-allocated buffer to avoid heap alloc/free churn under memory pressure.
   // _status_json_buffer and _last_raw_data are both Core 0-owned; no mutex needed.
+  #if defined(BOARD_HAS_PSRAM)
   char fallback_status_buffer[STATUS_JSON_BUFFER_SIZE];
   char* json_buffer = (_status_json_buffer != nullptr) ? _status_json_buffer : fallback_status_buffer;
+  #else
+  char* json_buffer = _status_json_buffer;
+  #endif
   char origin_id[65];
   char timestamp[32];
   char radio_info[64];
 
-  // Get current timestamp in ISO 8601 format
-  struct tm timeinfo;
-  if (getLocalTime(&timeinfo)) {
-    strftime(timestamp, sizeof(timestamp), "%Y-%m-%dT%H:%M:%S.000000", &timeinfo);
-  } else {
-    strcpy(timestamp, "2024-01-01T12:00:00.000000");
-  }
+  // Status timestamp: same prefs-based wall clock as packet/raw JSON `timestamp`
+  // (not libc getLocalTime — SNTP uses UTC offset 0; prefs Timezone is separate).
+  MQTTMessageBuilder::formatIsoTimestampForMqtt(time(nullptr), _timezone, timestamp, sizeof(timestamp));
 
   snprintf(radio_info, sizeof(radio_info), "%.6f,%.1f,%d,%d",
            _prefs->freq, _prefs->bw, _prefs->sf, _prefs->cr);
@@ -2475,7 +2499,8 @@ bool MQTTBridge::publishPacket(mesh::Packet* packet, bool is_tx,
   }
   #endif
 
-  // Use pre-allocated buffer; fallback to single stack buffer if not available
+  // Use pre-allocated buffer; stack fallback only when PSRAM heap alloc may be null.
+#if defined(BOARD_HAS_PSRAM)
   char json_buffer_stack[PUBLISH_JSON_BUFFER_SIZE];
   char* active_buffer;
   size_t active_buffer_size;
@@ -2486,6 +2511,10 @@ bool MQTTBridge::publishPacket(mesh::Packet* packet, bool is_tx,
     active_buffer = json_buffer_stack;
     active_buffer_size = PUBLISH_JSON_BUFFER_SIZE;
   }
+#else
+  char* active_buffer = _publish_json_buffer;
+  const size_t active_buffer_size = PUBLISH_JSON_BUFFER_SIZE;
+#endif
   char origin_id[65];
 
   strncpy(origin_id, _device_id, sizeof(origin_id) - 1);
@@ -2552,7 +2581,7 @@ bool MQTTBridge::publishRaw(mesh::Packet* packet) {
 
   refreshOriginFromPrefs();
 
-  // Use pre-allocated buffer; fallback to single stack buffer if not available
+#if defined(BOARD_HAS_PSRAM)
   char json_buffer_stack[PUBLISH_JSON_BUFFER_SIZE];
   char* active_buffer;
   size_t active_buffer_size;
@@ -2563,6 +2592,10 @@ bool MQTTBridge::publishRaw(mesh::Packet* packet) {
     active_buffer = json_buffer_stack;
     active_buffer_size = PUBLISH_JSON_BUFFER_SIZE;
   }
+#else
+  char* active_buffer = _publish_json_buffer;
+  const size_t active_buffer_size = PUBLISH_JSON_BUFFER_SIZE;
+#endif
   char origin_id[65];
 
   strncpy(origin_id, _device_id, sizeof(origin_id) - 1);
