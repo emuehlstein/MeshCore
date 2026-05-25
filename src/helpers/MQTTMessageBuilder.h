@@ -11,12 +11,24 @@
  * This class handles the formatting of mesh packets and device status
  * into JSON messages for MQTT publishing according to the MeshCore
  * packet capture specification.
+ *
+ * Timestamps in JSON use the configured Timezone (prefs) for status, packet, and
+ * raw topics. Packet payloads also include separate `time` and `date` strings in
+ * UTC (gmtime) so they stay aligned with meshcoretomqtt serial regex fields.
  */
 class MQTTMessageBuilder {
 private:
   static const int JSON_BUFFER_SIZE = 1024;
   
 public:
+  /**
+   * Format the MQTT JSON `timestamp` field (same rule for status, packet, raw).
+   * Applies Timezone prefs via `timezone->toLocal(now)`; if timezone is nullptr,
+   * uses `now` unchanged. Output is naive local wall time, ISO-like
+   * "%Y-%m-%dT%H:%M:%S.000000".
+   */
+  static void formatIsoTimestampForMqtt(time_t now, Timezone* timezone, char* buffer, size_t buffer_size);
+
   /**
    * Build status message JSON
    *
@@ -27,7 +39,7 @@ public:
    * @param radio Radio information
    * @param client_version Client version
    * @param status Connection status ("online" or "offline")
-   * @param timestamp ISO 8601 timestamp
+   * @param timestamp ISO-like timestamp (see formatIsoTimestampForMqtt)
    * @param buffer Output buffer for JSON string
    * @param buffer_size Size of output buffer
    * @param battery_mv Battery voltage in millivolts (optional, -1 to omit)
@@ -39,6 +51,7 @@ public:
    * @param rx_air_secs RX air time in seconds (optional, -1 to omit)
    * @param recv_errors Radio receive/CRC errors (optional, -1 to omit)
    * @param internal_heap Internal heap free bytes (optional, -1 to omit)
+   * @param repeat Repeat/forwarding status ("on" or "off"); nullptr omits the field
    * @return Length of JSON string, or 0 on error
    */
   static int buildStatusMessage(
@@ -61,7 +74,8 @@ public:
     int tx_air_secs = -1,
     int rx_air_secs = -1,
     int recv_errors = -1,
-    int internal_heap = -1
+    int internal_heap = -1,
+    const char* repeat = nullptr
   );
 
   /**
@@ -69,10 +83,10 @@ public:
    *
    * @param origin Device name
    * @param origin_id Device public key (hex string)
-   * @param timestamp ISO 8601 timestamp
+   * @param timestamp ISO-like timestamp (see formatIsoTimestampForMqtt)
    * @param direction Packet direction ("rx" or "tx")
-   * @param time Time in HH:MM:SS format
-   * @param date Date in DD/MM/YYYY format
+   * @param time Time in HH:MM:SS (UTC, gmtime; meshcoretomqtt serial parity)
+   * @param date Date in DD/MM/YYYY (UTC, gmtime)
    * @param len Total packet length
    * @param packet_type Packet type code
    * @param route Routing type
@@ -112,7 +126,7 @@ public:
    *
    * @param origin Device name
    * @param origin_id Device public key (hex string)
-   * @param timestamp ISO 8601 timestamp
+   * @param timestamp ISO-like timestamp (see formatIsoTimestampForMqtt)
    * @param raw Raw packet data (hex string)
    * @param buffer Output buffer for JSON string
    * @param buffer_size Size of output buffer

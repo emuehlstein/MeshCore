@@ -1,8 +1,10 @@
 #include "MQTTBridge.h"
 #include "../MQTTMessageBuilder.h"
+#include "../TxtDataHelpers.h"
 #include <NTPClient.h>
 #include <WiFiUdp.h>
 #include <Timezone.h>
+#include <time.h>
 
 #ifdef WITH_SNMP
 #include "../SNMPAgent.h"
@@ -18,23 +20,30 @@
 #include <mbedtls/platform.h>
 #endif
 
-// Helper function to strip quotes from strings (both single and double quotes)
-static void stripQuotes(char* str, size_t max_len) {
-  if (!str || max_len == 0) return;
-
-  size_t len = strlen(str);
-  if (len == 0) return;
-
-  // Remove leading quote (single or double)
-  if (str[0] == '"' || str[0] == '\'') {
-    memmove(str, str + 1, len);
-    len--;
+// Effective MQTT origin: empty mqtt_origin follows node_name; otherwise mqtt_origin override (quotes stripped).
+static void applyEffectiveOrigin(const NodePrefs* prefs, char* dest, size_t dest_size) {
+  if (!prefs || !dest || dest_size == 0) return;
+  if (prefs->mqtt_origin[0] == '\0') {
+    strncpy(dest, prefs->node_name, dest_size - 1);
+  } else {
+    strncpy(dest, prefs->mqtt_origin, dest_size - 1);
   }
+  dest[dest_size - 1] = '\0';
+  StrHelper::stripSurroundingQuotes(dest, dest_size);
+}
 
-  // Remove trailing quote (single or double)
-  if (len > 0 && (str[len-1] == '"' || str[len-1] == '\'')) {
-    str[len-1] = '\0';
+void MQTTBridge::refreshOriginFromPrefs() {
+  if (!_prefs) return;
+  applyEffectiveOrigin(_prefs, _origin, sizeof(_origin));
+}
+
+void MQTTBridge::getEffectiveMqttOrigin(const NodePrefs* prefs, char* buf, size_t buf_size) {
+  if (!buf || buf_size == 0) return;
+  if (!prefs) {
+    buf[0] = '\0';
+    return;
   }
+  applyEffectiveOrigin(prefs, buf, buf_size);
 }
 
 // Helper function to check if WiFi credentials are valid
@@ -189,6 +198,25 @@ void MQTTBridge::formatMqttStatusReply(char* buf, size_t bufsize, const NodePref
 
 uint8_t MQTTBridge::getLastWifiDisconnectReason() { return s_wifi_disconnect_reason; }
 unsigned long MQTTBridge::getLastWifiDisconnectTime() { return s_wifi_disconnect_time; }
+
+unsigned long MQTTBridge::getSlotCurrentOutageStartMs(int slot_index) const {
+  if (slot_index < 0 || slot_index >= RUNTIME_MQTT_SLOTS) return 0;
+  return _slots[slot_index].current_outage_started_ms;
+}
+
+bool MQTTBridge::isSlotEnabledAndAttempted(int slot_index) const {
+  if (slot_index < 0 || slot_index >= RUNTIME_MQTT_SLOTS) return false;
+  const MQTTSlot& s = _slots[slot_index];
+  return s.enabled && s.initial_connect_done;
+}
+
+const char* MQTTBridge::getSlotPresetName(int slot_index) const {
+  if (slot_index < 0 || slot_index >= RUNTIME_MQTT_SLOTS) return "?";
+  const MQTTSlot& s = _slots[slot_index];
+  if (s.preset && s.preset->name) return s.preset->name;
+  if (!s.enabled) return MQTT_PRESET_NONE;
+  return MQTT_PRESET_CUSTOM;
+}
 
 const char* MQTTBridge::wifiReasonStr(uint8_t reason) {
   switch (reason) {
@@ -457,15 +485,12 @@ void MQTTBridge::begin() {
     return;
   }
 
-  // Update origin and IATA from preferences
-  strncpy(_origin, _prefs->mqtt_origin, sizeof(_origin) - 1);
-  _origin[sizeof(_origin) - 1] = '\0';
+  refreshOriginFromPrefs();
+
   strncpy(_iata, _prefs->mqtt_iata, sizeof(_iata) - 1);
   _iata[sizeof(_iata) - 1] = '\0';
 
-  // Strip quotes from origin and IATA if present
-  stripQuotes(_origin, sizeof(_origin));
-  stripQuotes(_iata, sizeof(_iata));
+  StrHelper::stripSurroundingQuotes(_iata, sizeof(_iata));
 
   // Convert IATA code to uppercase (IATA codes are conventionally uppercase)
   for (int i = 0; _iata[i]; i++) {
@@ -992,6 +1017,7 @@ void MQTTBridge::initSlotClients() {
       _slots[index].last_tls_stack_err = 0;
       _slots[index].last_sock_errno = 0;
       _slots[index].last_error_time = 0;
+      _slots[index].current_outage_started_ms = 0;  // clear current-outage timer for AlertReporter
       updateCachedConnectionStatus();
       publishStatusToSlot(index);
     });
@@ -1000,6 +1026,9 @@ void MQTTBridge::initSlotClients() {
       _slots[index].disconnect_count++;
       if (_slots[index].first_disconnect_time == 0) {
         _slots[index].first_disconnect_time = millis();
+      }
+      if (_slots[index].current_outage_started_ms == 0) {
+        _slots[index].current_outage_started_ms = millis();
       }
       _slots[index].connected = false;
       updateCachedConnectionStatus();
@@ -1650,6 +1679,8 @@ void MQTTBridge::publishStatusToSlot(int index) {
   MQTTSlot& slot = _slots[index];
   if (!slot.client || !slot.connected) return;
 
+  refreshOriginFromPrefs();
+
   // Build per-slot topic (handles IATA check for meshcore, token check for meshrank)
   char status_topic[128];
   if (!buildTopicForSlot(index, MSG_STATUS, status_topic, sizeof(status_topic))) {
@@ -1658,20 +1689,20 @@ void MQTTBridge::publishStatusToSlot(int index) {
 
   // Reuse pre-allocated buffer to avoid heap alloc/free churn under memory pressure.
   // _status_json_buffer and _last_raw_data are both Core 0-owned; no mutex needed.
+  #if defined(BOARD_HAS_PSRAM)
   char fallback_status_buffer[STATUS_JSON_BUFFER_SIZE];
   char* json_buffer = (_status_json_buffer != nullptr) ? _status_json_buffer : fallback_status_buffer;
+  #else
+  char* json_buffer = _status_json_buffer;
+  #endif
 
   char origin_id[65];
   char timestamp[32];
   char radio_info[64];
 
-  // Get current timestamp in ISO 8601 format
-  struct tm timeinfo;
-  if (getLocalTime(&timeinfo)) {
-    strftime(timestamp, sizeof(timestamp), "%Y-%m-%dT%H:%M:%S.000000", &timeinfo);
-  } else {
-    strcpy(timestamp, "2024-01-01T12:00:00.000000");
-  }
+  // Status timestamp: same prefs-based wall clock as packet/raw JSON `timestamp`
+  // (not libc getLocalTime — SNTP uses UTC offset 0; prefs Timezone is separate).
+  MQTTMessageBuilder::formatIsoTimestampForMqtt(time(nullptr), _timezone, timestamp, sizeof(timestamp));
 
   snprintf(radio_info, sizeof(radio_info), "%.6f,%.1f,%d,%d",
            _prefs->freq, _prefs->bw, _prefs->sf, _prefs->cr);
@@ -1711,7 +1742,8 @@ void MQTTBridge::publishStatusToSlot(int index) {
     _origin, origin_id, _board_model, _firmware_version, radio_info,
     client_version, "online", timestamp, json_buffer, STATUS_JSON_BUFFER_SIZE,
     battery_mv, uptime_secs, errors, _queue_count, noise_floor,
-    tx_air_secs, rx_air_secs, recv_errors, internal_heap_free
+    tx_air_secs, rx_air_secs, recv_errors, internal_heap_free,
+    _prefs->disable_fwd ? "off" : "on"
   );
 
   if (len > 0) {
@@ -2344,21 +2376,23 @@ bool MQTTBridge::publishStatus() {
     return false;
   }
 
+  refreshOriginFromPrefs();
+
   // Reuse pre-allocated buffer to avoid heap alloc/free churn under memory pressure.
   // _status_json_buffer and _last_raw_data are both Core 0-owned; no mutex needed.
+  #if defined(BOARD_HAS_PSRAM)
   char fallback_status_buffer[STATUS_JSON_BUFFER_SIZE];
   char* json_buffer = (_status_json_buffer != nullptr) ? _status_json_buffer : fallback_status_buffer;
+  #else
+  char* json_buffer = _status_json_buffer;
+  #endif
   char origin_id[65];
   char timestamp[32];
   char radio_info[64];
 
-  // Get current timestamp in ISO 8601 format
-  struct tm timeinfo;
-  if (getLocalTime(&timeinfo)) {
-    strftime(timestamp, sizeof(timestamp), "%Y-%m-%dT%H:%M:%S.000000", &timeinfo);
-  } else {
-    strcpy(timestamp, "2024-01-01T12:00:00.000000");
-  }
+  // Status timestamp: same prefs-based wall clock as packet/raw JSON `timestamp`
+  // (not libc getLocalTime — SNTP uses UTC offset 0; prefs Timezone is separate).
+  MQTTMessageBuilder::formatIsoTimestampForMqtt(time(nullptr), _timezone, timestamp, sizeof(timestamp));
 
   snprintf(radio_info, sizeof(radio_info), "%.6f,%.1f,%d,%d",
            _prefs->freq, _prefs->bw, _prefs->sf, _prefs->cr);
@@ -2398,7 +2432,8 @@ bool MQTTBridge::publishStatus() {
     _origin, origin_id, _board_model, _firmware_version, radio_info,
     client_version, "online", timestamp, json_buffer, STATUS_JSON_BUFFER_SIZE,
     battery_mv, uptime_secs, errors, _queue_count, noise_floor,
-    tx_air_secs, rx_air_secs, recv_errors, internal_heap_free
+    tx_air_secs, rx_air_secs, recv_errors, internal_heap_free,
+    _prefs->disable_fwd ? "off" : "on"
   );
 
   if (len > 0) {
@@ -2432,6 +2467,8 @@ bool MQTTBridge::publishPacket(mesh::Packet* packet, bool is_tx,
                                 float snr, float rssi) {
   if (!packet) return false;
 
+  refreshOriginFromPrefs();
+
   // Memory pressure check: Skip publishes when there's not enough contiguous
   // heap for the publish itself (JSON buffer + esp-mqtt outbox frame + WiFi TX
   // path). Headroom only — NOT an mbedTLS preflight: persistent clients keep
@@ -2462,7 +2499,8 @@ bool MQTTBridge::publishPacket(mesh::Packet* packet, bool is_tx,
   }
   #endif
 
-  // Use pre-allocated buffer; fallback to single stack buffer if not available
+  // Use pre-allocated buffer; stack fallback only when PSRAM heap alloc may be null.
+#if defined(BOARD_HAS_PSRAM)
   char json_buffer_stack[PUBLISH_JSON_BUFFER_SIZE];
   char* active_buffer;
   size_t active_buffer_size;
@@ -2473,6 +2511,10 @@ bool MQTTBridge::publishPacket(mesh::Packet* packet, bool is_tx,
     active_buffer = json_buffer_stack;
     active_buffer_size = PUBLISH_JSON_BUFFER_SIZE;
   }
+#else
+  char* active_buffer = _publish_json_buffer;
+  const size_t active_buffer_size = PUBLISH_JSON_BUFFER_SIZE;
+#endif
   char origin_id[65];
 
   strncpy(origin_id, _device_id, sizeof(origin_id) - 1);
@@ -2537,7 +2579,9 @@ bool MQTTBridge::publishPacket(mesh::Packet* packet, bool is_tx,
 bool MQTTBridge::publishRaw(mesh::Packet* packet) {
   if (!packet) return false;
 
-  // Use pre-allocated buffer; fallback to single stack buffer if not available
+  refreshOriginFromPrefs();
+
+#if defined(BOARD_HAS_PSRAM)
   char json_buffer_stack[PUBLISH_JSON_BUFFER_SIZE];
   char* active_buffer;
   size_t active_buffer_size;
@@ -2548,6 +2592,10 @@ bool MQTTBridge::publishRaw(mesh::Packet* packet) {
     active_buffer = json_buffer_stack;
     active_buffer_size = PUBLISH_JSON_BUFFER_SIZE;
   }
+#else
+  char* active_buffer = _publish_json_buffer;
+  const size_t active_buffer_size = PUBLISH_JSON_BUFFER_SIZE;
+#endif
   char origin_id[65];
 
   strncpy(origin_id, _device_id, sizeof(origin_id) - 1);

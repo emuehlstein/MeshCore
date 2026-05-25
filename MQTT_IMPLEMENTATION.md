@@ -33,7 +33,7 @@ If migrating from an existing node (e.g., a Raspberry Pi gateway), restore the p
 set prv.key <your_64_hex_char_private_key>
 ```
 
-**4. Configure WiFi credentials**
+**4. Configure WiFi credentials** (value is the rest of the line; do not use quotes — see [WiFi Commands](#wifi-commands))
 ```bash
 set wifi.ssid YourWiFiNetwork
 set wifi.pwd YourWiFiPassword
@@ -77,7 +77,7 @@ get mqtt.status
 
 The MQTT bridge implementation provides:
 - Up to 6 MQTT connection slots with built-in presets
-- Built-in presets for LetsMesh Analyzer (US/EU), MeshMapper, MeshRank, Waev, Meshomatic, CascadiaMesh, EastIdahoMesh, and TennMesh
+- Built-in presets for LetsMesh Analyzer (US/EU), MeshMapper, MeshRank, Waev, Meshomatic, CascadiaMesh, EastIdahoMesh, ColoradoMesh, and TennMesh
 - Custom broker support with username/password authentication
 - JWT (Ed25519 device signing) authentication for most preset brokers; TennMesh uses a fixed username/password (plain MQTT)
 - WSS (WebSocket Secure), direct MQTT/TLS, and plain MQTT (TennMesh) transport
@@ -108,6 +108,9 @@ The MQTT bridge uses a slot-based architecture with up to 6 concurrent connectio
 | `chimesh` | wss://mqtt.chimesh.org:443 | JWT (Ed25519) | WSS |
 | `meshat.se` | mqtts://mqtt.meshat.se:8883 | Username/password (fixed in firmware) | MQTT over TLS |
 | `eastidahomesh` | wss://broker.eastidahomesh.net:443 | None | WSS |
+| `coloradomesh` | wss://mqtt.meshcore.coloradomesh.org:1883 | JWT (Ed25519) | WSS |
+| `meshcore-ca-1` | mqtt1.meshcore.ca:443 | JWT (Ed25519) | WSS |
+| `meshcore-ca-2` | mqtt2.meshcore.ca:443 | JWT (Ed25519) | WSS |
 | `custom` | User-configured | Username/Password | MQTT or WSS |
 | `none` | (disabled) | — | — |
 
@@ -151,7 +154,15 @@ pio run -e heltec_v4_repeater_observer_mqtt
 
 # Station G2
 pio run -e Station_G2_repeater_observer_mqtt
+
+# LilyGo T-LoRa V2.1-1.6 (TTGO LoRa32 V1.0)
+pio run -e LilyGo_TLora_V2_1_1_6_repeater_observer_mqtt
+pio run -e LilyGo_TLora_V2_1_1_6_room_server_observer_mqtt
 ```
+
+**TLora naming:** The env prefix `LilyGo_TLora_V2_1_1_6` is LilyGo’s **T-LoRa V2.1–1.6** board (SX1276); PlatformIO selects **`ttgo-lora32-v1`** (TTGO LoRa32 V1.0). **MQTT observer** envs extend a slim base **without** `sensor_base` so the image fits `min_spiffs`; **all other** `LilyGo_TLora_V2_1_1_6_*` targets still use optional I2C environmental sensors as before. The **`lilygo_tlora_c6`** variant is separate hardware (ESP32-C6).
+
+**T-LoRa V2.1–1.6 MQTT observer — one WSS broker:** This hardware is **classic ESP32 without PSRAM**. Each WSS preset uses a full TLS stack and large contiguous heap allocations; **two active broker presets at once** typically fails the second connection (`mbedtls_ssl_setup` / `esp-tls` `0x8017`, low `IntMax` in `memory`). **Treat these observer builds as supporting one active cloud preset:** configure the broker you need in `mqtt1` or `mqtt2`, and set the other slot to `none` (e.g. `set mqtt2.preset none`). Use PSRAM-capable boards if you need multiple simultaneous MQTT uplinks.
 
 ### Partition Table Changes — Merged Firmware Required
 
@@ -161,8 +172,19 @@ Some MQTT observer builds use a non-default partition table to accommodate the l
 |-------------|----------------|------------|---------------|-------|
 | `LilyGo_T3S3_sx1262_repeater_observer_mqtt` | `min_spiffs.csv` | 4 MB | 1.875 MB | Changed from default (1.25 MB) |
 | `LilyGo_T3S3_sx1262_room_server_observer_mqtt` | `min_spiffs.csv` | 4 MB | 1.875 MB | Changed from default (1.25 MB) |
+| `LilyGo_TLora_V2_1_1_6_repeater_observer_mqtt` | `min_spiffs.csv` | 4 MB | 1.875 MB | TTGO LoRa32 V1.0; observer omits `sensor_base`. **One active WSS broker** recommended (no PSRAM; dual TLS usually fails on the second slot). |
+| `LilyGo_TLora_V2_1_1_6_room_server_observer_mqtt` | `min_spiffs.csv` | 4 MB | 1.875 MB | same |
 | `Station_G2_repeater_observer_mqtt` | `default_16MB.csv` | 16 MB | 6.25 MB | 16 MB flash board |
 | `Station_G2_room_server_observer_mqtt` | `default_16MB.csv` | 16 MB | 6.25 MB | 16 MB flash board |
+| `LilyGo_TBeam_1W_repeater_observer_mqtt` | `default_16MB.csv` | 16 MB | 6.25 MB | Set in `boards/t_beam_1w.json`; required vs implicit `default.csv` |
+| `LilyGo_TBeam_1W_room_server_observer_mqtt` | `default_16MB.csv` | 16 MB | 6.25 MB | same |
+
+**NVS / settings when the partition layout changes**
+
+Flashing a **full merged image** (`*-merged.bin` at offset `0x0`) writes a new bootloader **and** partition table. If that layout **differs** from what is already on the device, **NVS is typically wiped or invalidated** — expect to lose stored configuration (admin preferences, WiFi, MQTT slots, name, etc.) and reconfigure from scratch.
+
+- **`LilyGo_TLora_V2_1_1_6_*_observer_mqtt`:** These use the **same** `min_spiffs.csv` layout as other MeshCore TLora builds, so moving between repeater / room server / MQTT observer does **not** require a different partition table for normal upgrades. **If you previously installed an older TLora MQTT observer that used `huge_app.csv`,** flashing this firmware switches back to `min_spiffs` — treat that as a **partition layout change** (merged flash; NVS may be reset). **If you install MeshCore on a device that used a non-MeshCore partition map,** the first merged flash can still **wipe** settings.
+- **`Station_G2_*_observer_mqtt`** and **`LilyGo_TBeam_1W_*_observer_mqtt`**: These use `default_16MB.csv` to accomodate the larger size of the MQTT observer firmware. Installing MQTT observer firmware on these devices requires a **merged** flash the first time. The same applies if you move **from** firmware that was built with a **different** partition table—the first merged flash that installs this layout will **wipe** stored settings. 
 
 **How to flash the merged firmware:**
 
@@ -178,7 +200,7 @@ You can flash the merged firmware using either the web flasher or the command li
   esptool.py write_flash 0x0 .pio/build/LilyGo_T3S3_sx1262_repeater_observer_mqtt/firmware-merged.bin
   ```
 
-> **Note:** Flashing the merged firmware will erase Bluetooth pairings but preserves device configuration stored in NVS. After the first merged flash, subsequent updates can use OTA or the standard non-merged binary.
+> **Note:** If the **partition layout is unchanged** (e.g. updating the MQTT observer build in place), device configuration in NVS is usually retained; Bluetooth pairings may still be cleared on some upgrade paths. If the **partition table is new to the device**, see **NVS / settings when the partition layout changes** above — stored settings are typically lost. After the first merged flash **for a given layout**, subsequent updates on that board can use OTA or the standard non-merged binary when applicable.
 
 ### Build Flags
 - `WITH_MQTT_BRIDGE=1` - Enable MQTT bridge (required)
@@ -187,11 +209,37 @@ You can flash the merged firmware using either the web flasher or the command li
 - `MQTT_WIFI_TX_POWER` - WiFi TX power level (default: `WIFI_POWER_11dBm`)
 - ~~`MQTT_WIFI_POWER_SAVE_DEFAULT`~~ - Removed; all builds now default to `none` (no power save)
 
+#### Compile-time fresh-install defaults (`src/helpers/MQTTDefaults.h`)
+
+Optional PlatformIO `build_flags` override defaults written when `/mqtt_prefs` is first created. They do **not** change existing saved prefs on upgrade or reflash (unless `/mqtt_prefs` is erased).
+
+| Macro | Default | Notes |
+|-------|---------|-------|
+| `MQTT_DEFAULT_SLOT1_PRESET` … `MQTT_DEFAULT_SLOT6_PRESET` | slots 1–2: `analyzer-us` / `analyzer-eu`; slots 3–6: `none` | Must be a built-in preset name, `none`, or `custom` |
+| `MQTT_DEFAULT_IATA` | (empty) | e.g. `'"YYZ"'` |
+| `MQTT_DEFAULT_TIMEZONE` | (empty) | e.g. `'"America/Toronto"'` |
+| `MQTT_DEFAULT_TIMEZONE_OFFSET` | `0` | Fallback hours when TZ string is empty |
+
+Example community build:
+
+```ini
+build_flags =
+  -D MQTT_DEFAULT_SLOT1_PRESET='"meshcore-ca-1"'
+  -D MQTT_DEFAULT_SLOT2_PRESET='"meshcore-ca-2"'
+  -D MQTT_DEFAULT_IATA='"YYZ"'
+  -D MQTT_DEFAULT_TIMEZONE='"America/Toronto"'
+  -D MQTT_DEFAULT_TIMEZONE_OFFSET=-5
+```
+
+WiFi SSID/password are not compile-time configurable (operators set them per device via CLI).
+
+Legacy `get mqtt.analyzer_us` / `set mqtt.analyzer_us` still refer to the preset name `analyzer-us`, not “whatever slot 1 default is”.
+
 ## Default Configuration
 
-The MQTT bridge comes with the following defaults for fresh installs:
+The MQTT bridge comes with the following defaults for fresh installs (unless overridden by the macros above):
 - **Origin**: Device name (set automatically from `set name`)
-- **IATA**: (blank — must be configured for MeshCore-style topic presets such as Analyzer and TennMesh)
+- **IATA**: (blank — must be configured for MeshCore-style topic presets such as Analyzer and TennMesh, unless `MQTT_DEFAULT_IATA` is set at build time)
 - **Status Messages**: Enabled
 - **Packet Messages**: Enabled
 - **Raw Messages**: Disabled
@@ -202,10 +250,10 @@ The MQTT bridge comes with the following defaults for fresh installs:
 - **Slot 2**: `analyzer-eu`
 - **Slots 3-6**: `none` (disabled)
 - **WiFi SSID**: (blank — must be configured)
-- **WiFi Password**: (blank — must be configured)
+- **WiFi Password**: (blank — optional for open networks)
 - **WiFi Power Save**: `none` (no power save)
-- **Timezone**: (blank — uses UTC until configured)
-- **Timezone Offset**: 0 (fallback, no offset)
+- **Timezone**: (blank — uses UTC until configured, unless `MQTT_DEFAULT_TIMEZONE` is set at build time)
+- **Timezone Offset**: 0 (fallback, no offset, unless `MQTT_DEFAULT_TIMEZONE_OFFSET` is set)
 - **Repeat (forwarding)**: On (set `repeat off` for receive-only observers)
 
 ## CLI Commands
@@ -239,6 +287,7 @@ Each slot (1-6) supports the following commands:
 - `set mqttN.preset chimesh` - Set slot N to ChicagolandMesh
 - `set mqttN.preset meshat.se` - Set slot N to Meshat.se
 - `set mqttN.preset eastidahomesh` - Set slot N to EastIdahoMesh (WSS/TLS, no auth; packets on `meshcore/{IATA}/{PUBLIC_KEY}/packets`)
+- `set mqttN.preset coloradomesh` - Set slot N to ColoradoMesh
 - `set mqttN.preset custom` - Set slot N to custom broker (configure server/port/username/password)
 - `set mqttN.preset none` - Disable slot N
 - `set mqttN.server <hostname>` - Set custom server hostname for slot N
@@ -315,7 +364,7 @@ When a slot's preset is `custom`, you can define a custom topic template using p
 
 If no custom topic is set, custom slots default to: `meshcore/{iata}/{device}/{type}`
 
-**Note:** Topic templates only apply to `custom` preset slots. Built-in presets (analyzer-us, analyzer-eu, meshmapper, meshrank, eastidahomesh, tennmesh, etc.) always use their hardcoded topic format.
+**Note:** Topic templates only apply to `custom` preset slots. Built-in presets (analyzer-us, analyzer-eu, meshmapper, meshrank, eastidahomesh, coloradomesh, tennmesh, etc.) always use their hardcoded topic format.
 
 ### MQTT Shared Commands
 
@@ -362,6 +411,8 @@ These settings apply across all MQTT slots:
 - `set wifi.ssid <ssid>` - Set WiFi SSID
 - `set wifi.pwd <password>` - Set WiFi password
 - `set wifi.powersave none|min|max` - Set WiFi power save mode
+
+> **Note:** The value is everything after the first space (spaces in SSID/password are fine). Do not wrap in quotes — they are stored literally. Max length: 31 characters (SSID), 63 (password). For open networks, use `set wifi.pwd ` with nothing after the space.
   - `none` - No power saving (best performance, highest power consumption)
   - `min` - Minimum power saving (balanced performance and power)
   - `max` - Maximum power saving (lowest power consumption, may affect performance)
@@ -463,7 +514,8 @@ Minimal raw packet data for map integration.
   "model": "device_model",
   "firmware_version": "firmware_version",
   "radio": "radio_info",
-  "client_version": "meshcore-custom-repeater/{build_date}"
+  "client_version": "meshcore-custom-repeater/{build_date}",
+  "repeat": "on|off"
 }
 ```
 
@@ -508,7 +560,7 @@ Minimal raw packet data for map integration.
 
 ### Slot-Based Preset System
 - Up to 6 concurrent MQTT connections (with PSRAM), 2 without PSRAM
-- Built-in presets for LetsMesh Analyzer (US/EU), MeshMapper, MeshRank, Waev, Meshomatic, CascadiaMesh, EastIdahoMesh, and TennMesh
+- Built-in presets for LetsMesh Analyzer (US/EU), MeshMapper, MeshRank, Waev, Meshomatic, CascadiaMesh, EastIdahoMesh, ColoradoMesh, and TennMesh
 - Custom broker support with username/password auth and custom topic templates
 - JWT (Ed25519) for most preset brokers; MeshRank uses token-in-topic; TennMesh uses fixed username/password over plain MQTT
 - WSS (WebSocket Secure), direct MQTT over TLS, and plain MQTT (TennMesh)
@@ -584,6 +636,9 @@ set prv.key <your_64_hex_char_private_key>
 ```
 
 ### Step 3: Configure WiFi
+
+Use the rest of the line as the value (spaces allowed; no quotes). See [WiFi Commands](#wifi-commands).
+
 ```
 set wifi.ssid YourWiFiNetwork
 set wifi.pwd YourWiFiPassword
@@ -649,7 +704,7 @@ get mqtt1.diag             # Last slot error details (TLS/sock/time)
 get mqtt2.diag
 get mqtt3.diag
 get mqtt1.preset           # Verify slots are configured
-get mqtt.iata              # IATA must be set for MeshCore-topic presets (e.g. Analyzer, TennMesh)
+get mqtt.iata              # IATA must be set for MeshCore-topic presets (e.g. Analyzer, ColoradoMesh, TennMesh)
 ```
 
 #### Timezone Issues
@@ -664,13 +719,8 @@ set timezone UTC-5               # UTC offset
 
 Observer nodes include an optional SNMP v2c agent that exposes radio stats, MQTT connectivity, memory usage, and network information to standard monitoring tools. See [MQTT_SNMP.md](MQTT_SNMP.md) for setup and OID reference.
 
-## Dependencies
 
-- **PsychicMqttClient**: MQTT client library (supports WSS and direct MQTT)
-- **ArduinoJson**: JSON message formatting
-- **NTPClient**: Network time protocol client
-- **Timezone**: Timezone conversion library (JChristensen/Timezone)
-- **WiFi**: ESP32 WiFi functionality
-- **Ed25519**: Cryptographic library for JWT token signing
-- **JWTHelper**: Custom JWT token generation for device authentication
-- **SNMP_Agent**: Optional SNMPv2c agent (0neblock/SNMP_Agent, observer builds only)
+## Fault Alerts
+
+Fault alerts broadcast LoRa group-channel notifications when WiFi or configured MQTT links stay down past configured thresholds, with optional recovery notices and rate limiting to avoid spam.
+For configuration, CLI commands, examples, and operational notes, see [ALERTS.md](ALERTS.md).

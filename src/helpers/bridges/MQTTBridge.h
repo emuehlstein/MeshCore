@@ -96,6 +96,12 @@ private:
     unsigned long last_error_time;  // millis() of last error
     uint32_t disconnect_count;      // Number of disconnect callbacks since boot
     unsigned long first_disconnect_time; // millis() of first disconnect after boot
+
+    // Current-outage timer (used by AlertReporter to fire faults after a sustained
+    // outage). Reset to 0 on each successful connect, set to millis() on first
+    // disconnect-after-connect. first_disconnect_time is intentionally separate
+    // so the existing 'mqttN.diag' "first_disc" semantics don't change.
+    unsigned long current_outage_started_ms;
   };
 
   MQTTSlot _slots[RUNTIME_MQTT_SLOTS];
@@ -223,7 +229,7 @@ private:
   char _status_json_buffer[STATUS_JSON_BUFFER_SIZE];
   #endif
 
-  // JSON document scratch space — inline StaticJsonDocument keeps the pool off the 8 KB MQTT
+  // JSON document scratch space — inline StaticJsonDocument keeps the pool off the MQTT
   // task stack and eliminates two separate heap allocations (fragmentation reduction).
   StaticJsonDocument<PUBLISH_JSON_BUFFER_SIZE> _packet_json_doc;
   StaticJsonDocument<STATUS_JSON_BUFFER_SIZE>  _status_json_doc;
@@ -333,6 +339,7 @@ private:
   void optimizeMqttClientConfig(PsychicMqttClient* client, bool needs_large_buffer = false);
   void getClientVersion(char* buffer, size_t buffer_size) const;
   void logMemoryStatus();
+  void refreshOriginFromPrefs();
 
 public:
   MQTTBridge(NodePrefs *prefs, mesh::PacketManager *mgr, mesh::RTCClock *rtc, mesh::LocalIdentity *identity);
@@ -380,6 +387,25 @@ public:
   bool isReady() const;
 
   static unsigned long getWifiConnectedAtMillis();
+
+  /**
+   * Per-slot outage accessors used by AlertReporter to detect prolonged
+   * MQTT broker outages. Indices are 0..RUNTIME_MQTT_SLOTS-1.
+   *
+   * - getSlotCurrentOutageStartMs(): millis() of the current outage start
+   *   (0 when the slot is connected). Reset on each reconnect.
+   * - isSlotEnabledAndAttempted(): true when the slot is enabled (preset
+   *   != "none") and has reached at least one connect attempt — i.e. it is
+   *   meaningful to alarm on its connection state.
+   * - getSlotPresetName(): preset name for friendly status text. Returns
+   *   "custom"/"none"/preset->name; never null.
+   */
+  unsigned long getSlotCurrentOutageStartMs(int slot_index) const;
+  bool isSlotEnabledAndAttempted(int slot_index) const;
+  const char* getSlotPresetName(int slot_index) const;
+  static int getRuntimeSlotCount() { return RUNTIME_MQTT_SLOTS; }
+  /** Resolved origin for MQTT JSON: node_name when mqtt_origin is empty, else mqtt_origin (with quote stripping). */
+  static void getEffectiveMqttOrigin(const NodePrefs* prefs, char* buf, size_t buf_size);
   static void formatMqttStatusReply(char* buf, size_t bufsize, const NodePrefs* prefs);
   /** True when WiFi is set and at least one MQTT slot can run (preset + custom host if needed). */
   static bool isConfigValid(const NodePrefs* prefs);
