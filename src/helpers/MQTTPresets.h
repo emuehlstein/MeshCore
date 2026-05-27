@@ -131,6 +131,7 @@ static const MQTTPresetDef MQTT_PRESETS[MQTT_PRESET_COUNT] = {
     { "meshcore-ca-1",   "wss://mqtt1.meshcore.ca:443/mqtt",           "mqtt1.meshcore.ca",                ISRG_ROOT_X1,  MQTT_AUTH_JWT,      MQTT_TOPIC_MESHCORE,   0,       true,  55,      nullptr,       nullptr      },
     { "meshcore-ca-2",   "wss://mqtt2.meshcore.ca:443/mqtt",           "mqtt2.meshcore.ca",                ISRG_ROOT_X1,  MQTT_AUTH_JWT,      MQTT_TOPIC_MESHCORE,   0,       true,  55,      nullptr,       nullptr      },
     { "inwmesh",         "mqtts://scope.inwmesh.org:8883",             nullptr,                            ISRG_ROOT_X1,  MQTT_AUTH_USERPASS, MQTT_TOPIC_MESHCORE,   0,       true,  55,      nullptr,       nullptr      },
+};
 
 // Find a preset by name, returns nullptr if not found
 static const MQTTPresetDef* findMQTTPreset(const char* name) {
