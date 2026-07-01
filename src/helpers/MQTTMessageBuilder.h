@@ -19,18 +19,20 @@
  * regex fields.
  */
 class MQTTMessageBuilder {
-private:
-  static const int JSON_BUFFER_SIZE = 1024;
-  
 public:
   /**
    * Format the MQTT JSON `timestamp` field (same rule for status, packet, raw).
    * Always UTC with an explicit "+00:00" offset, ISO-8601
-   * "%Y-%m-%dT%H:%M:%S.000000+00:00" (matches Python
+   * "%Y-%m-%dT%H:%M:%S.uuuuuu+00:00" (matches Python
    * datetime.now(timezone.utc).isoformat()). The `timezone` parameter is retained
    * for API compatibility but ignored — the system clock is UTC.
+   *
+   * `usec` is the sub-second component in microseconds (0..999999), normally taken
+   * from the same gettimeofday() read as `now` so the two don't tear at a second
+   * boundary. It is a real sub-second (SNTP-maintained wall clock), not a literal;
+   * pass 0 if no sub-second source is available.
    */
-  static void formatIsoTimestampForMqtt(time_t now, Timezone* timezone, char* buffer, size_t buffer_size);
+  static void formatIsoTimestampForMqtt(time_t now, long usec, Timezone* timezone, char* buffer, size_t buffer_size);
 
   /**
    * Build status message JSON
@@ -78,6 +80,8 @@ public:
     int rx_air_secs = -1,
     int recv_errors = -1,
     int internal_heap = -1,
+    int packets_sent = -1,
+    int packets_received = -1,
     const char* repeat = nullptr
   );
 
@@ -98,7 +102,9 @@ public:
    * @param snr Signal-to-noise ratio
    * @param rssi Received signal strength
    * @param hash Packet hash
-   * @param path Routing path (for direct packets)
+   * @param path_bytes Raw routing-path bytes (direct packets only; nullptr to omit)
+   * @param path_hop_count Number of path hops (0 to omit the path field)
+   * @param path_hash_size Bytes per hop hash (1-4)
    * @param buffer Output buffer for JSON string
    * @param buffer_size Size of output buffer
    * @return Length of JSON string, or 0 on error
@@ -118,8 +124,11 @@ public:
     const char* raw,
     float snr,
     int rssi,
+    float score,
     const char* hash,
-    const char* path,
+    const uint8_t* path_bytes,
+    int path_hop_count,
+    int path_hash_size,
     char* buffer,
     size_t buffer_size
   );
@@ -176,6 +185,7 @@ public:
     const char* origin_id,
     float snr,
     float rssi,
+    float score,
     Timezone* timezone,
     char* buffer,
     size_t buffer_size
@@ -202,29 +212,9 @@ public:
 
 private:
   /**
-   * Convert packet type to string
-   */
-  static const char* getPacketTypeString(int packet_type);
-
-  /**
    * Convert route type to string
    */
   static const char* getRouteTypeString(int route_type);
-
-  /**
-   * Format timestamp to ISO 8601 format
-   */
-  static void formatTimestamp(unsigned long timestamp, char* buffer, size_t buffer_size);
-
-  /**
-   * Format time to HH:MM:SS format
-   */
-  static void formatTime(unsigned long timestamp, char* buffer, size_t buffer_size);
-
-  /**
-   * Format date to DD/MM/YYYY format
-   */
-  static void formatDate(unsigned long timestamp, char* buffer, size_t buffer_size);
 
   /**
    * Convert bytes to hex string (uppercase)
