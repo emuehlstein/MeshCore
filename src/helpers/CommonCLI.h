@@ -29,7 +29,8 @@ struct NodePrefs { // persisted to file
   int8_t tx_power_dbm;
   uint8_t disable_fwd;
   uint8_t advert_interval;       // minutes / 2
-  uint8_t rx_boosted_gain;       // power settings (file offset 79)
+  uint8_t rx_boosted_gain;       // power settings (persisted at /com_prefs offset 290;
+                                 // offset 79 is a pad — see writeCommonPrefsImage)
   uint8_t flood_advert_interval; // hours
   float rx_delay_base;
   float tx_delay_factor;
@@ -63,182 +64,42 @@ struct NodePrefs { // persisted to file
   uint32_t discovery_mod_timestamp;
   float adc_multiplier;
   char owner_info[120];
-  // MQTT settings (stored separately in /mqtt_prefs, but kept here for backward compatibility)
-  char mqtt_origin[32];     // Device name for MQTT topics
-  char mqtt_iata[8];        // IATA code for MQTT topics
-  uint8_t mqtt_status_enabled;   // Enable status messages
-  uint8_t mqtt_packets_enabled;  // Enable packet messages
-  uint8_t mqtt_raw_enabled;      // Enable raw messages
-  uint8_t mqtt_tx_enabled;       // TX packet uplinking: 0=off, 1=all, 2=advert (self-originated only)
-  uint32_t mqtt_status_interval; // Status publish interval (ms)
-  uint8_t mqtt_rx_enabled;       // Enable RX packet uplinking (default: on)
-
-  // WiFi settings
-  char wifi_ssid[32];       // WiFi SSID
-  char wifi_password[64];  // WiFi password
-  uint8_t wifi_power_save; // WiFi power save mode: 0=min, 1=none, 2=max (default: 1=none)
-  
-  // Timezone settings
-  char timezone_string[32]; // Timezone string (e.g., "America/Los_Angeles")
-  int8_t timezone_offset;   // Timezone offset in hours (-12 to +14) - fallback
-  
-  // MQTT slot presets (up to MAX_MQTT_SLOTS, each can be a preset name or "custom"/"none")
-  char mqtt_slot_preset[MAX_MQTT_SLOTS][24]; // e.g. "analyzer-us", "meshmapper", "custom", "none"
-
-  // Per-slot custom broker settings (only used when slot preset is "custom")
-  char mqtt_slot_host[MAX_MQTT_SLOTS][64];
-  uint16_t mqtt_slot_port[MAX_MQTT_SLOTS];
-  char mqtt_slot_username[MAX_MQTT_SLOTS][32];
-  char mqtt_slot_password[MAX_MQTT_SLOTS][64];
-
-  // Shared MQTT authentication
-  char mqtt_owner_public_key[65]; // Owner public key (hex string, same length as repeater public key)
-  char mqtt_email[64]; // Owner email address for matching nodes with owners
-
-  // Per-slot extended fields
-  char mqtt_slot_token[MAX_MQTT_SLOTS][48];    // Per-slot token (e.g., MeshRank account token)
-  char mqtt_slot_topic[MAX_MQTT_SLOTS][96];    // Per-slot custom topic template (custom preset only)
-  char mqtt_slot_audience[MAX_MQTT_SLOTS][64]; // JWT audience (non-empty enables JWT auth for custom slots)
 
   uint8_t loop_detect;
 
-  // SNMP settings (optional, only used when WITH_SNMP is defined)
-  uint8_t snmp_enabled;          // boolean: 0=off, 1=on
-  char snmp_community[24];       // community string (default "public")
-  uint8_t radio_watchdog_minutes; // 0=disabled, 1-120 minutes
+  // Restored from upstream (dropped by the 22eb9b87 revert). Persisted at the same
+  // /com_prefs offsets upstream uses (293, 294) so the file stays upstream-aligned.
+  uint8_t radio_fem_rxgain;  // LoRa FEM RX-gain (LNA); default on. Hardware driving is
+                             // wired per-board in the FEM-restore change; persisted here.
+  uint8_t cad_enabled;       // hardware Channel Activity Detection before TX; default off
 
-  // Fault alert channel (LoRa group-channel "observer status" message on prolonged WiFi/MQTT outage).
-  // Sent over the radio (NOT over MQTT) so the alert still works while the MQTT path is broken.
-  // All fields are appended at the end of NodePrefs for binary-compatible upgrades.
-  uint8_t  alert_enabled;          // 0 = off (default), 1 = on
-  char     alert_psk_hex[33];      // 32 lowercase hex chars (16-byte channel secret) + null; empty = alerts disabled. Banned keys (Public/#test/#bot) are rejected.
-  uint16_t alert_wifi_minutes;     // WiFi-down threshold in minutes (0 = disabled), default 30
-  uint16_t alert_mqtt_minutes;     // MQTT-down threshold in minutes (0 = disabled), default 240 (4 h)
-  uint16_t alert_min_interval_min; // min minutes between alerts for the same fault, default 60, floor 60
-  // When the operator configures via `set alert.hashtag <name>`, we derive
-  // alert_psk_hex from sha256("#name")[0..15] once and remember the hashtag
-  // text here purely for `get alert.hashtag` readback. A subsequent
-  // `set alert.psk` clears this field so it doesn't lie about provenance.
-  char     alert_hashtag[24];
-  // Optional region name (e.g. "us", "eu"); empty = use the repeater's
-  // default_scope. Looked up lazily via RegionMap::findByNamePrefix at send
-  // time, so the operator can name a region that doesn't exist yet without
-  // polluting region_map state. Falls back to default_scope on miss.
-  char     alert_region[31];
-
-  // Custom NTP server (MQTT observer); empty = built-in default primary (pool.ntp.org)
-  char mqtt_ntp_server[64];
+  // NOTE: observer settings (MQTT/WiFi/timezone/SNMP/alert) were moved out of
+  // NodePrefs into MQTTPrefs (persisted to /mqtt_prefs) so this struct stays
+  // aligned with upstream. See struct MQTTPrefs below.
 };
 
 #ifdef WITH_MQTT_BRIDGE
-// Old MQTT preferences layout (pre-slot firmware) — used only for migration detection
-struct OldMQTTPrefs {
-  char mqtt_origin[32];
-  char mqtt_iata[8];
-  uint8_t mqtt_status_enabled;
-  uint8_t mqtt_packets_enabled;
-  uint8_t mqtt_raw_enabled;
-  uint8_t mqtt_tx_enabled;
-  uint32_t mqtt_status_interval;
-  char wifi_ssid[32];
-  char wifi_password[64];
-  uint8_t wifi_power_save;
-  char timezone_string[32];
-  int8_t timezone_offset;
-  char mqtt_server[64];
-  uint16_t mqtt_port;
-  char mqtt_username[32];
-  char mqtt_password[64];
-  uint8_t mqtt_analyzer_us_enabled;
-  uint8_t mqtt_analyzer_eu_enabled;
-  char mqtt_owner_public_key[65];
-  char mqtt_email[64];
-};
+#include <helpers/MQTTPrefsStorage.h>
+static_assert(MQTT_PREFS_SLOT_COUNT == MAX_MQTT_SLOTS,
+              "MQTT prefs layout and slot count must change together");
 
-// MQTT preferences stored in separate file to avoid conflicts with upstream NodePrefs changes
-struct MQTTPrefs {
-  // MQTT settings
-  char mqtt_origin[32];     // Device name for MQTT topics
-  char mqtt_iata[8];        // IATA code for MQTT topics
-  uint8_t mqtt_status_enabled;   // Enable status messages
-  uint8_t mqtt_packets_enabled;  // Enable packet messages
-  uint8_t mqtt_raw_enabled;      // Enable raw messages
-  uint8_t mqtt_tx_enabled;       // Enable TX packet uplinking
-  uint32_t mqtt_status_interval; // Status publish interval (ms)
-
-  // WiFi settings
-  char wifi_ssid[32];       // WiFi SSID
-  char wifi_password[64];  // WiFi password
-  uint8_t wifi_power_save; // WiFi power save mode: 0=min, 1=none, 2=max (default: 1=none)
-
-  // Timezone settings
-  char timezone_string[32]; // Timezone string (e.g., "America/Los_Angeles")
-  int8_t timezone_offset;   // Timezone offset in hours (-12 to +14) - fallback
-
-  // Slot presets (up to MAX_MQTT_SLOTS)
-  char mqtt_slot_preset[MAX_MQTT_SLOTS][24]; // e.g. "analyzer-us", "meshmapper", "custom", "none"
-
-  // Per-slot custom broker settings (only used when preset is "custom")
-  char mqtt_slot_host[MAX_MQTT_SLOTS][64];
-  uint16_t mqtt_slot_port[MAX_MQTT_SLOTS];
-  char mqtt_slot_username[MAX_MQTT_SLOTS][32];
-  char mqtt_slot_password[MAX_MQTT_SLOTS][64];
-
-  // Shared authentication
-  char mqtt_owner_public_key[65]; // Owner public key (hex string)
-  char mqtt_email[64]; // Owner email address
-
-  // --- Legacy fields (vestigial, kept for binary compatibility) ---
-  // Migration now uses OldMQTTPrefs/ThreeSlotMQTTPrefs structs. These fields are unused
-  // but must remain to preserve byte offsets for devices that already saved a new-format /mqtt_prefs file.
-  uint8_t _legacy_analyzer_us_enabled;
-  uint8_t _legacy_analyzer_eu_enabled;
-  char _legacy_mqtt_server[64];
-  uint16_t _legacy_mqtt_port;
-  char _legacy_mqtt_username[32];
-  char _legacy_mqtt_password[64];
-
-  // --- New fields (appended at end for migration safety) ---
-  char mqtt_slot_token[MAX_MQTT_SLOTS][48];    // Per-slot token (e.g., MeshRank account token)
-  char mqtt_slot_topic[MAX_MQTT_SLOTS][96];    // Per-slot custom topic template (custom preset only)
-  char mqtt_slot_audience[MAX_MQTT_SLOTS][64];  // JWT audience (non-empty enables JWT auth for custom slots)
-
-  // --- Appended fields (added after initial 6-slot migration) ---
-  uint8_t mqtt_rx_enabled;       // Enable RX packet uplinking (default: on)
-  char mqtt_ntp_server[64];      // Custom NTP server; empty = pool.ntp.org
-};
-
-// 3-slot MQTTPrefs layout — used for migrating from 3-slot to 6-slot format.
-// Changing array sizes from [3] to [6] shifts all field offsets, so raw file.read()
-// into the new struct would corrupt data. This struct preserves the old binary layout.
-struct ThreeSlotMQTTPrefs {
-  char mqtt_origin[32];
-  char mqtt_iata[8];
-  uint8_t mqtt_status_enabled;
-  uint8_t mqtt_packets_enabled;
-  uint8_t mqtt_raw_enabled;
-  uint8_t mqtt_tx_enabled;
-  uint32_t mqtt_status_interval;
-  char wifi_ssid[32];
-  char wifi_password[64];
-  uint8_t wifi_power_save;
-  char timezone_string[32];
-  int8_t timezone_offset;
-  char mqtt_slot_preset[3][24];
-  char mqtt_slot_host[3][64];
-  uint16_t mqtt_slot_port[3];
-  char mqtt_slot_username[3][32];
-  char mqtt_slot_password[3][64];
-  char mqtt_owner_public_key[65];
-  char mqtt_email[64];
-  uint8_t _legacy_analyzer_us_enabled;
-  uint8_t _legacy_analyzer_eu_enabled;
-  char _legacy_mqtt_server[64];
-  uint16_t _legacy_mqtt_port;
-  char _legacy_mqtt_username[32];
-  char _legacy_mqtt_password[64];
-  char mqtt_slot_token[3][48];
-  char mqtt_slot_topic[3][96];
+// Observer settings captured from the trailing block of an old-format /com_prefs
+// (fork firmware that predates the NodePrefs -> MQTTPrefs split). loadPrefsInt()
+// fills this in when it detects the old file layout; loadMQTTPrefs() then applies
+// the values one-time if the loaded /mqtt_prefs predates the appended observer
+// fields, so SNMP/watchdog/alert config survives the firmware upgrade.
+struct LegacyObserverTail {
+  bool valid = false;
+  uint8_t snmp_enabled;
+  char snmp_community[24];
+  uint8_t radio_watchdog_minutes;
+  uint8_t alert_enabled;
+  char alert_psk_hex[33];
+  uint16_t alert_wifi_minutes;
+  uint16_t alert_mqtt_minutes;
+  uint16_t alert_min_interval_min;
+  char alert_hashtag[24];
+  char alert_region[31];
 };
 #endif
 
@@ -312,14 +173,26 @@ public:
     return false;
   };
 
+  // Browser-based config portal (ESP32 WITH_MQTT_BRIDGE builds override).
+  // force_ap=true requests the SoftAP setup portal even when WiFi is configured.
+  // Returns true if handled (reply filled either way when true).
+  virtual bool startWebConfig(bool force_ap, char* reply) {
+    (void)force_ap; (void)reply;
+    return false;
+  };
+  virtual bool stopWebConfig(char* reply) {
+    (void)reply;
+    return false;
+  };
+
   // Probe all configured NTP servers for connectivity (verbose=serial console gets a
   // detailed table; otherwise reply gets a compact "<server> ok|fail" list).
   virtual bool runMqttNtpDiag(char* reply, size_t reply_size, bool verbose) {
     return false; // WITH_MQTT_BRIDGE builds override
   };
 
-  virtual void setRxBoostedGain(bool enable) {
-    // no op by default
+  virtual bool setRxBoostedGain(bool enable) {
+    return false; // CommonCLI reports unsupported if not overridden by wrapper
   };
 
   // Fault-alert channel hooks (see NodePrefs::alert_*). The default no-op
@@ -341,6 +214,12 @@ public:
   }
 };
 
+#ifdef WITH_MQTT_BRIDGE
+namespace MQTTPrefsAtomicStore {
+class LegacyUpgradeGate;
+}
+#endif
+
 class CommonCLI {
   mesh::RTCClock* _rtc;
   NodePrefs* _prefs;
@@ -352,29 +231,49 @@ class CommonCLI {
   char tmp[PRV_KEY_SIZE*2 + 4];
 #ifdef WITH_MQTT_BRIDGE
   MQTTPrefs _mqtt_prefs;
+  LegacyObserverTail _legacy_tail;
+  // /mqtt_prefs is newer, corrupt, or temporarily unreadable. The in-memory prefs
+  // run on defaults and saveMQTTPrefs() must not overwrite the source file.
+  bool _mqtt_prefs_hold = false;
 #endif
+  bool _com_prefs_needs_upgrade = false;  // old-format /com_prefs detected; rewrite once after load
 
   mesh::RTCClock* getRTCClock() { return _rtc; }
   void savePrefs();
   void loadPrefsInt(FILESYSTEM* _fs, const char* filename);
+  bool saveCommonPrefsImageAtomically(FILESYSTEM* fs);
 #ifdef WITH_MQTT_BRIDGE
-  void loadMQTTPrefs(FILESYSTEM* fs);
-  void saveMQTTPrefs(FILESYSTEM* fs);
-  void syncMQTTPrefsToNodePrefs();
-  void syncNodePrefsToMQTTPrefs();
+  void loadMQTTPrefs(FILESYSTEM* fs, MQTTPrefsAtomicStore::LegacyUpgradeGate* legacy_upgrade);
+  bool saveMQTTPrefs(FILESYSTEM* fs);
 #endif
 
   void handleRegionCmd(char* command, char* reply);
   void handleGetCmd(uint32_t sender_timestamp, char* command, char* reply);
   void handleSetCmd(uint32_t sender_timestamp, char* command, char* reply);
 
+  // Observer/MQTT/WiFi/timezone/alert/SNMP CLI handling lives in the fork-owned
+  // CommonCLI_Observer.cpp to keep these branches out of the upstream-tracked
+  // CommonCLI.cpp. Each returns true if it recognized (handled) the command, or
+  // false to fall through to the base get/set parsing.
+  bool handleObserverSetCmd(uint32_t sender_timestamp, const char* config, char* reply);
+  bool handleObserverGetCmd(uint32_t sender_timestamp, const char* config, char* reply);
+  // Observer-only top-level commands (ota check/update, tls.bundletest, alert test)
+  // also live in CommonCLI_Observer.cpp; returns true if it handled the command.
+  bool handleObserverCommand(uint32_t sender_timestamp, char* command, char* reply);
+
 public:
   CommonCLI(mesh::MainBoard& board, mesh::RTCClock& rtc, SensorManager& sensors, RegionMap& region_map, ClientACL& acl, NodePrefs* prefs, CommonCLICallbacks* callbacks)
       : _board(&board), _rtc(&rtc), _sensors(&sensors), _region_map(&region_map), _acl(&acl), _prefs(prefs), _callbacks(callbacks) { }
 
   void loadPrefs(FILESYSTEM* _fs);
-  void savePrefs(FILESYSTEM* _fs);
+  void savePrefs(FILESYSTEM* _fs, bool save_mqtt = true);
   void handleCommand(uint32_t sender_timestamp, char* command, char* reply);
   mesh::MainBoard* getBoard() { return _board; }
   uint8_t buildAdvertData(uint8_t node_type, uint8_t* app_data);
+#ifdef WITH_MQTT_BRIDGE
+  // Observer config (MQTT/WiFi/timezone/SNMP/alert), persisted to /mqtt_prefs.
+  // Exposed so the app can hand it to MQTTBridge/AlertReporter, which read these
+  // fields directly (they no longer live in NodePrefs).
+  MQTTPrefs* getObserverPrefs() const { return const_cast<MQTTPrefs*>(&_mqtt_prefs); }
+#endif
 };
