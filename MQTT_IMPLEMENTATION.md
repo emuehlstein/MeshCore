@@ -109,7 +109,7 @@ The MQTT bridge uses a slot-based architecture with up to 6 concurrent connectio
 | `ctmesh` | mqtt.ctmesh.org:1883 | Username/password (fixed in firmware) | Plain MQTT |
 | `chimesh` | wss://mqtt.chimesh.org:443 | JWT (Ed25519) | WSS |
 | `meshat.se` | meshcore-mqtt.meshat.se:443 | JWT (Ed25519) | WSS |
-| `eastidahomesh` | wss://broker.eastidahomesh.net:443 | None | WSS |
+| `eastidahomesh` | mqtt://live.eastidahomesh.com:1883 | None | Plain MQTT |
 | `coloradomesh` | wss://mqtt.meshcore.coloradomesh.org:1883 | JWT (Ed25519) | WSS |
 | `dutchmeshcore-1` | collector1.dutchmeshcore.nl:443 | JWT (Ed25519) | WSS |
 | `dutchmeshcore-2` | collector2.dutchmeshcore.nl:443 | JWT (Ed25519) | WSS |
@@ -134,22 +134,6 @@ The MQTT bridge uses a slot-based architecture with up to 6 concurrent connectio
 - If more slots are configured than the device supports, excess slots show as `(inactive)` in `get mqtt.status`
 - Slot configurations are preserved in preferences — moving firmware to a PSRAM device activates all slots
 
-### Files
-
-#### Core Implementation
-- `src/helpers/bridges/MQTTBridge.h` - MQTT bridge class definition
-- `src/helpers/bridges/MQTTBridge.cpp` - MQTT bridge implementation
-- `src/helpers/MQTTPresets.h` - Preset definitions, CA certificates, and lookup functions
-- `src/helpers/MQTTMessageBuilder.h` - JSON message formatting utilities
-- `src/helpers/MQTTMessageBuilder.cpp` - JSON message formatting implementation
-- `src/helpers/JWTHelper.h` - JWT token generation for Ed25519-based authentication
-
-#### Integration
-- Updated `examples/simple_repeater/MyMesh.h` - Added MQTT bridge support
-- Updated `examples/simple_repeater/MyMesh.cpp` - Added MQTT bridge integration and raw radio data capture
-- Updated `src/helpers/CommonCLI.h` - MQTT slot preferences, WiFi, and timezone fields
-- Updated `src/helpers/CommonCLI.cpp` - MQTT slot CLI commands, migration logic
-
 ## Build Configuration
 
 To build the MQTT bridge firmware:
@@ -160,6 +144,12 @@ pio run -e Heltec_v3_repeater_observer_mqtt
 
 # Heltec V4
 pio run -e heltec_v4_repeater_observer_mqtt
+
+# Heltec Wireless Tracker v1.1 / v2
+pio run -e heltec_tracker_v1_1_repeater_observer_mqtt
+pio run -e heltec_tracker_v1_1_room_server_observer_mqtt
+pio run -e heltec_tracker_v2_repeater_observer_mqtt
+pio run -e heltec_tracker_v2_room_server_observer_mqtt
 
 # Station G2
 pio run -e Station_G2_repeater_observer_mqtt
@@ -258,6 +248,7 @@ The MQTT bridge comes with the following defaults for fresh installs (unless ove
 - **Slot 1**: `analyzer-us`
 - **Slot 2**: `analyzer-eu`
 - **Slots 3-6**: `none` (disabled)
+- **Per-slot packet filters**: `all` (every payload type is uploaded)
 - **WiFi SSID**: (blank — must be configured)
 - **WiFi Password**: (blank — optional for open networks)
 - **WiFi Power Save**: `none` (no power save)
@@ -282,6 +273,7 @@ Each slot (1-6) supports the following commands:
 - `get mqttN.token` - Get per-slot token (e.g., MeshRank account token)
 - `get mqttN.topic` - Get custom topic template for slot N
 - `get mqttN.audience` - Get JWT audience for slot N (custom slots only)
+- `get mqttN.filter` - Get the slot's packet-type allowlist (`all`, `none`, or numeric CSV)
 
 #### Set Commands
 - `set mqttN.preset <name>` - Set slot N to a built-in preset. Use any `name` from the [preset table](#slot-based-preset-system) (run `get mqtt.presets` on-device for the full list). Most presets need no further configuration; the exceptions are:
@@ -297,8 +289,70 @@ Each slot (1-6) supports the following commands:
 - `set mqttN.topic <template>` - Set custom topic template (custom preset only, see below)
 - `set mqttN.audience <audience>` - Set JWT audience for custom slot (enables Ed25519 JWT auth)
 - `set mqttN.audience` - Clear JWT audience (reverts to username/password auth)
+- `set mqttN.filter <all|none|list>` - Select payload types uploaded to this slot
 
 **Note:** Custom server/port settings only apply when the slot's preset is `custom`. Username/password also apply to built-in presets that use per-slot credentials (e.g. `inwmesh`); other userpass presets (`tennmesh`, `nashmesh`, `ctmesh`) ship fixed credentials in firmware.
+
+#### Per-broker packet filters
+
+Each slot has an independent allowlist. List entries may be payload-type names
+or numbers, and the two can be mixed. These are all equivalent, sending only
+text messages and adverts to slot 1:
+
+```bash
+set mqtt1.filter txt_msg,advert
+set mqtt1.filter 2,4
+set mqtt1.filter advert, 2
+```
+
+Use `none` when a broker should remain connected for status/neighbors but
+receive no packet traffic. A bare `set mqttN.filter` resets the slot to `all`.
+`get mqttN.filter` always answers in the canonical numeric form (`all`, `none`,
+or an ascending CSV), whichever spelling was used to set it.
+
+| Type | Name | Type | Name |
+|------|------|------|------|
+| 0 | `req` | 8 | `path` |
+| 1 | `response` | 9 | `trace` |
+| 2 | `txt_msg` | 10 | `multipart` |
+| 3 | `ack` | 11 | `control` |
+| 4 | `advert` | 12-14 | reserved (number only) |
+| 5 | `grp_txt` | 15 | `raw_custom` |
+| 6 | `grp_data` | | |
+| 7 | `anon_req` | | |
+
+Names are lowercase and exact; types 12-14 are reserved upstream and have no
+name, so they are selectable by number only.
+
+The filter applies to both structured `packets` and `raw` publications for RX
+packets and for TX packets permitted by `mqtt.tx`. It does not affect local
+packet processing, forwarding, capture logs, status, or neighbors. Changes
+apply live without reconnecting the broker.
+
+A rejected packet is dropped before it is copied into the publish queue, so a
+narrow filter saves the queue slot and the per-packet work, not just the
+upload. `get mqtt.stats` reports the running count as `filt=<n>`, and a slot
+whose filter is not `all` shows it in `get mqttN.diag` and on the WebConfig
+Stats tab — a filtered slot otherwise looks identical to an idle healthy one.
+
+The diag reply is capped at 160 characters. When a slot is also reporting a
+long error tail, the filter is summarised as `filter:<n>/16` rather than
+listed, because a list clipped mid-way would read as a different, valid
+allowlist. `get mqttN.filter` always gives the exact value.
+
+In WebConfig the allowlist is a checkbox per type under each configured slot,
+with **All** / **None** shortcuts. Clearing every box is `none` (nothing
+uploaded).
+
+**Downgrade note:** rolling back to any build from this release onward is safe —
+the older firmware reads the settings it understands and simply ignores the
+packet filters, which revert to `all` if it saves.
+
+Rolling back to a build released *before* this one is the case to watch: that
+firmware rejects the longer settings file outright and falls back to defaults,
+losing the stored WiFi credentials along with the broker config. Slots left at
+the `all` default keep the file in the shorter layout those builds can read, so
+if you may need to roll a node back that far, reset every slot to `all` first.
 
 #### Example: Configure MeshRank on Slot 3
 ```bash
@@ -392,6 +446,8 @@ These settings apply across all MQTT slots:
 - `get mqtt.rx` - Get RX packet uplinking setting (on/off)
 - `get mqtt.tx` - Get TX packet uplinking setting (on/off/advert)
 - `get mqtt.interval` - Get status publish interval
+- `get mqtt.neighbors` - Get periodic neighbors publishing setting (on/off; PSRAM only)
+- `get mqtt.neighbors.interval` - Get neighbors publish interval in hours (PSRAM only)
 - `get mqtt.ntp` - Get effective NTP server hostname
 - `get mqtt.ntp.diag` - Probe every configured NTP server for connectivity (does not change the clock; serial console shows each server's reported time, LoRa shows a compact `<server> ok|fail` list)
 - `get mqtt.owner` - Get owner public key (serial console only)
@@ -409,6 +465,8 @@ These settings apply across all MQTT slots:
   - `advert` - Uplink only this node's own advert packets (self-originated)
   - `off` - Disable TX packet uplinking
 - `set mqtt.interval <minutes>` - Set status publish interval (1-60 minutes)
+- `set mqtt.neighbors on|off` - Enable/disable periodic neighbors publishing (PSRAM only; read live, no restart)
+- `set mqtt.neighbors.interval <hours>` - Set neighbors publish interval (12-336 hours, default 24; PSRAM only)
 - `set mqtt.ntp <hostname>` - Set custom NTP server (validated with immediate sync); `none` reverts to default
 - `set mqtt.owner <64-hex-char-public-key>` - Set owner public key
 - `set mqtt.email <email>` - Set owner email address
@@ -484,6 +542,86 @@ These are standard MeshCore commands, not MQTT-specific, but important for obser
 
 See [MQTT_SNMP.md](MQTT_SNMP.md) for full SNMP documentation.
 
+### Web Configuration Portal
+
+The observer builds include a browser-based configuration portal so a node can
+be provisioned and managed without the serial CLI. It is started from the CLI
+(serial or remote admin) and is never on by default on a configured node.
+
+#### CLI commands
+- `start webconfig` — start the portal. If WiFi is already configured and
+  connected, it binds to the node's **LAN** IP and requires the admin password
+  to log in. If WiFi is **not** configured (`wifi.ssid` empty), it raises the
+  setup AP instead (same as first boot).
+- `start webconfig ap` — force the **setup AP** even when WiFi is configured.
+  The MQTT bridge must be stopped first (`set bridge off`); the AP owns the
+  radio. Used for re-provisioning in the field.
+- `stop webconfig` — stop the portal and free its resources. LAN mode runs until
+  this is issued; the setup AP also auto-stops after an idle timeout (default 10
+  minutes with no station associated).
+
+#### First-boot / setup-AP behavior
+On a node with no WiFi configured, the portal comes up automatically as an open
+SoftAP named `MeshCore-Setup-XXXX` (last two bytes of the public key), with a
+captive-portal redirect. The device display shows the AP name and portal URL
+(`http://192.168.4.1/`). Walk through the wizard (WiFi → radio → MQTT → review),
+then **Save & reboot**; the node reboots and joins the configured network.
+
+Optionally set a WPA2 password for the setup AP at build time with
+`-D WEBCONFIG_AP_PASSWORD='"yourpassword"'`.
+
+#### Modes and authentication
+- **Setup AP**: unauthenticated. Trust is based on physical proximity to the
+  open/PSK AP. Only the SoftAP interface serves the API — on `start webconfig
+  ap` the STA is explicitly disassociated so the API is **not** exposed on the
+  LAN the node was attached to.
+- **LAN**: requires the admin password (same one used for remote CLI admin).
+  Sessions use a cookie with a sliding idle expiry (default 20 minutes); five
+  failed logins trigger a 30-second lockout.
+
+> **Security note:** the open setup AP transports WiFi/MQTT credentials over
+> plain HTTP. Provision on a trusted, non-public frequency/location, set
+> `WEBCONFIG_AP_PASSWORD` where feasible, and prefer LAN mode for ongoing
+> management. The setup AP is intended for initial provisioning, not
+> long-running operation.
+
+#### Applying changes
+- **Radio** (freq/BW/SF/CR): persisted but applied only on reboot; the UI shows
+  a "reboot to apply" hint.
+- **WiFi SSID/password**: changing these in LAN mode saves and reboots so the
+  node reconnects on the new network (the page will drop; find the new IP on
+  your router). In the setup wizard, saving always reboots.
+- **MQTT publishing toggles / slot config**: applied live to the running bridge
+  (no reboot needed).
+- **NTP server**: saved immediately; the time sync runs in the background —
+  verify with `get mqtt.ntp.diag`.
+
+#### Recovery
+If provisioning fails or you're locked out of the portal, connect over USB
+serial and use the CLI directly (e.g. `set wifi.ssid ...`, `set wifi.pwd ...`,
+`get wifi.status`, `stop webconfig`). Serial access always works regardless of
+the portal state.
+
+### Local testing without hardware
+
+Two ways to iterate on observer/WiFi functionality without flashing a device:
+
+- **Portal UI** — run the mock backend and open the real portal in a browser:
+  `python3 scripts/webconfig_mock_server.py` (add `--setup` for the first-boot
+  wizard), then browse to `http://localhost:8080/`. It serves `webui/index.html`
+  and mirrors the firmware's `/api/*` contract (reqid handshake, reboot gating,
+  validation, secret masking), so the portal JS runs against realistic
+  responses. Stdlib only; no account.
+- **Boot / WiFi / MQTT / CLI / OLED** — the Wokwi ESP32-S3 sim. Build
+  `pio run -e Heltec_v3_repeater_observer_mqtt_sim -t mergebin` (LoRa radio
+  stubbed via `SimRadio`, WiFi pre-seeded to `Wokwi-GUEST`), then run the sim
+  from `wokwi.toml`/`diagram.json` (VS Code Wokwi extension or `wokwi-cli`).
+  Outbound MQTT works on the free gateway; incoming (browser → on-device portal)
+  needs Wokwi's paid Private Gateway — use the mock backend above for portal UI.
+
+Backend handler logic is covered by host unit tests under `test/` (`pio test -e
+native`); see [test/README.md](test/README.md) for the suites and how to run them.
+
 ## Command Architecture
 
 The CLI commands are organized into two levels:
@@ -513,6 +651,12 @@ Full packet data with RF characteristics and metadata.
 
 ### Raw Topic: `meshcore/{IATA}/{DEVICE_PUBLIC_KEY}/raw`
 Minimal raw packet data for map integration.
+
+### Neighbors Topic: `meshcore/{IATA}/{DEVICE_PUBLIC_KEY}/neighbors`
+Periodic snapshot of this node's zero-hop neighbor table plus each neighbor's
+region scopes (PSRAM boards only; disabled by default). Published non-retained at
+QoS 1 on the interval set by `mqtt.neighbors.interval` (12–336 h, default 24 h).
+Like status/raw, this topic is **not** sent to MeshRank slots (packets-only contract).
 
 **Note**: `{DEVICE_PUBLIC_KEY}` is the device's public key in hexadecimal format (64 characters).
 
@@ -591,6 +735,28 @@ Minimal raw packet data for map integration.
   "data": "F5930103807E5F1E..."
 }
 ```
+
+### Neighbors Message
+```json
+{
+  "timestamp": "2024-01-01T12:00:00.000000+00:00",
+  "origin": "MeshCore-HOWL",
+  "origin_id": "A1B2C3D4E5F67890...",
+  "self": { "scopes": "DEN,APRS" },
+  "neighbors": [
+    {
+      "pubkey": "0011223344556677...",
+      "snr": 9.75,
+      "heard_secs_ago": 42,
+      "scopes": "DEN,APRS",
+      "status": "responded"
+    }
+  ]
+}
+```
+Entries are ordered most- to least-useful (most recently heard, then stronger
+SNR); the tail is dropped if the payload would exceed the 10 KB publish buffer.
+`status` is `responded`, `timeout`, or `send_failed` per neighbor.
 
 ## Key Features
 
@@ -790,3 +956,7 @@ set radio.watchdog 0     # disable watchdog
 ```
 
 On very quiet meshes where no traffic is expected for long periods, increase the interval or set `0` to disable the watchdog and avoid unnecessary radio recoveries.
+
+## Developer Documentation
+
+For source layout, the seams that isolate the observer feature from upstream MeshCore code, and on-device settings migration across firmware versions, see [MQTT_INTERNALS.md](MQTT_INTERNALS.md).

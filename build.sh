@@ -134,9 +134,25 @@ build_firmware() {
     exit 1
   fi
 
+  # Observer build number: when CI provides FIRMWARE_BUILD_NUMBER (the per-base
+  # published-build counter), it becomes a 4th version component (e.g. .5 ->
+  # v1.16.0.5). Computed up front because it now feeds BOTH the filename and the
+  # embedded version. Local dev builds leave it unset → no 4th component.
+  BUILD_NUMBER_SUFFIX=""
+  if [ -n "$FIRMWARE_BUILD_NUMBER" ]; then
+    BUILD_NUMBER_SUFFIX=".${FIRMWARE_BUILD_NUMBER}"
+  fi
+
   # set firmware version string (used for the output filename)
-  # e.g: v1.0.0-abcdef
-  FIRMWARE_VERSION_STRING="${FIRMWARE_VERSION}-${COMMIT_HASH}"
+  # e.g: v1.0.0-abcdef — or v1.16.0.5-dev-abcdef with a build number and the
+  # dev channel's FILENAME_CHANNEL_TAG. The build number is now IN the filename
+  # so the web flasher's Version dropdown (parsed from the asset name by the
+  # /releases Worker) shows the true published build, matching the embedded
+  # version that `ver` reports. Every filename parser (flasher gen-slim-manifests
+  # ASSET_RE, the /releases Worker VERSION_RE, flasher.js stale-URL recovery)
+  # accepts an optional 4th ".<n>" component followed by the lowercase
+  # (?:-[a-z]+)? channel tag between version and hash.
+  FIRMWARE_VERSION_STRING="${FIRMWARE_VERSION}${BUILD_NUMBER_SUFFIX}${FILENAME_CHANNEL_TAG:-}-${COMMIT_HASH}"
 
   # craft filename
   # e.g: RAK_4631_Repeater-v1.0.0-SHA
@@ -144,29 +160,48 @@ build_firmware() {
 
   # Tag the *embedded* version for observer builds, e.g. v1.0.0-observer-abcdef,
   # so `ver`, the MQTT firmware_version/client_version, and SNMP all identify the
-  # fork. The filename above is intentionally left untagged: the env name already
-  # contains "observer", and the web flasher keys off that existing pattern.
+  # fork. The filename above carries the same version + build number but no
+  # variant/channel tag: the env name already contains "observer", and the web
+  # flasher keys off that existing pattern.
   VARIANT_TAG=""
   case "$1" in
     *observer*) VARIANT_TAG="-observer" ;;
   esac
 
-  # Observer build number: when CI provides FIRMWARE_BUILD_NUMBER (the per-base
-  # published-build counter), append it as a 4th version component so the node
-  # reports e.g. v1.16.0.5-observer-abcdef and `ota check` can show how many
-  # builds behind it is. Local dev builds leave it unset → no 4th component.
-  # The *filename* (FIRMWARE_VERSION_STRING above) is deliberately left without
-  # the build number so assets stay <env>-v<base>-<hash>.bin.
-  BUILD_NUMBER_SUFFIX=""
-  if [ -n "$FIRMWARE_BUILD_NUMBER" ]; then
-    BUILD_NUMBER_SUFFIX=".${FIRMWARE_BUILD_NUMBER}"
+  # Optional release-channel marker (e.g. OTA_CHANNEL_TAG=beta -> "-observer-beta"),
+  # so `ver` / MQTT firmware_version / SNMP identify which channel a node runs
+  # without having to infer it from log behavior. Safe for the OTA version logic:
+  # ota_parseVersion() reads only up to the first '-' and ota_extractHash() takes
+  # the token after the LAST '-', so extra tags in between change neither.
+  if [ -n "$OTA_CHANNEL_TAG" ]; then
+    VARIANT_TAG="${VARIANT_TAG}-${OTA_CHANNEL_TAG}"
   fi
+
+  # Embedded version: base + build number (4th component) + variant/channel tag
+  # + hash, e.g. v1.16.0.5-observer-abcdef, so the node reports its build and
+  # `ota check` can show how many builds behind it is.
   EMBEDDED_VERSION_STRING="${FIRMWARE_VERSION}${BUILD_NUMBER_SUFFIX}${VARIANT_TAG}-${COMMIT_HASH}"
+
+  # Release channel. The observer pull-OTA fetches its slim per-variant manifest
+  # from <OTA_MANIFEST_BASE>/<OTA_VARIANT>.json, so this URL IS the channel: a
+  # device only ever sees updates published under the base it was built with.
+  # Override OTA_MANIFEST_BASE_URL to publish a parallel channel (e.g. beta);
+  # unset gives the production channel.
+  #
+  # Deliberately injected here rather than declared in variants/*/platformio.ini
+  # (where it used to be duplicated 28 times), for symmetry with OTA_VARIANT and
+  # so a plain `pio run` leaves BOTH macros undefined — which is what makes
+  # ESP32Board.cpp's "ERR: OTA not configured (build via build.sh)" guard fire on
+  # dev builds. Do not add a default in a header: that would silently arm OTA on
+  # locally built firmware. Note that PLATFORMIO_BUILD_FLAGS cannot reliably
+  # override a -D coming from build_flags (SCons reorders -U/-D), which is why
+  # the .ini declarations were removed rather than overridden.
+  OTA_MANIFEST_BASE_URL="${OTA_MANIFEST_BASE_URL:-https://observer.gessaman.com/v}"
 
   # add firmware version info to end of existing platformio build flags in environment vars.
   # OTA_VARIANT is the env name ($1) — it selects this build's slim per-variant manifest
   # (<OTA_MANIFEST_BASE>/<OTA_VARIANT>.json) that the observer pull-OTA fetches.
-  export PLATFORMIO_BUILD_FLAGS="${PLATFORMIO_BUILD_FLAGS} -DFIRMWARE_BUILD_DATE='\"${FIRMWARE_BUILD_DATE}\"' -DFIRMWARE_VERSION='\"${EMBEDDED_VERSION_STRING}\"' -DOTA_VARIANT='\"$1\"'"
+  export PLATFORMIO_BUILD_FLAGS="${PLATFORMIO_BUILD_FLAGS} -DFIRMWARE_BUILD_DATE='\"${FIRMWARE_BUILD_DATE}\"' -DFIRMWARE_VERSION='\"${EMBEDDED_VERSION_STRING}\"' -DOTA_VARIANT='\"$1\"' -DOTA_MANIFEST_BASE='\"${OTA_MANIFEST_BASE_URL}\"'"
 
   # disable debug flags if requested
   disable_debug_flags
