@@ -321,6 +321,11 @@ build_chicagoland_firmwares() {
   build_firmware "Station_G2_dedicated_observer_mqtt"
   build_firmware "Station_G2_room_server_observer_mqtt"
 
+  # Station G3 ESP32 (PSRAM, 6 slots: analyzer-us + waev + chimesh + chioff + rflab + chioff-dev)
+  build_firmware "Station_G3_ESP32_repeater_observer_mqtt"
+  build_firmware "Station_G3_ESP32_dedicated_observer_mqtt"
+  build_firmware "Station_G3_ESP32_room_server_observer_mqtt"
+
 }
 
 build_firmwares() {
