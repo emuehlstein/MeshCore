@@ -174,6 +174,7 @@ class MyMesh : public mesh::Mesh, public CommonCLICallbacks
   mesh::Packet* neighbor_discover_request;
   unsigned long next_neighbors_publish;
   char self_scopes_buf[96];
+  char self_default_scope_buf[31];
   char neighbor_discover_origin[32];
 
   void putNeighbour(const mesh::Identity& id, uint32_t timestamp, float snr);
@@ -188,6 +189,7 @@ class MyMesh : public mesh::Mesh, public CommonCLICallbacks
   void loopNeighborDiscover();
   void finishNeighborDiscover();
   bool handleNeighborDiscoverResponse(int overlay_idx, const uint8_t* data, size_t len);
+  void touchNeighbourHeard(const mesh::Identity& id, uint32_t heard_timestamp);
   void getLocalScopes(char* buf, size_t len);
   static const int NEIGHBOR_DISCOVER_PEER_BASE = 1000;
   static const unsigned long NEIGHBOR_DISCOVER_QUEUE_TIMEOUT_MS = 29000;
@@ -210,6 +212,7 @@ class MyMesh : public mesh::Mesh, public CommonCLICallbacks
 #endif
 
   void addPost(ClientInfo* client, const char* postData);
+  void storePost(const mesh::Identity& author, const char* postData);
   void pushPostToClient(ClientInfo* client, PostInfo& post);
   uint8_t getUnsyncedCount(ClientInfo* client);
   bool processAck(const uint8_t *data);
@@ -272,6 +275,7 @@ public:
   MyMesh(mesh::MainBoard& board, mesh::Radio& radio, mesh::MillisecondClock& ms, mesh::RNG& rng, mesh::RTCClock& rtc, mesh::MeshTables& tables);
 
   void begin(FILESYSTEM* fs);
+  void addSystemPost(const char* postData);
 
   const char* getFirmwareVer() override { return FIRMWARE_VERSION; }
   const char* getBuildDate() override { return FIRMWARE_BUILD_DATE; }
@@ -308,6 +312,7 @@ public:
 
   void dumpLogFile() override;
   void setTxPower(int8_t power_dbm) override;
+  bool setRxBoostedGain(bool enable) override;
 
   void formatNeighborsReply(char *reply) override;
   void removeNeighbor(const uint8_t* pubkey, int key_len) override;
