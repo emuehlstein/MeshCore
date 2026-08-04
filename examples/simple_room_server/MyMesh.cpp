@@ -1,6 +1,9 @@
 #include "MyMesh.h"
 #include <algorithm>
 #include <helpers/RxReservePacketManager.h>
+#if defined(WITH_MQTT_NEIGHBORS)
+#include <helpers/MQTTConnectionPolicy.h>  // kSyncedClockEpoch
+#endif
 
 #define ANON_REQ_TYPE_REGIONS       0x01   // client side of the anon-regions scope query (neighbors feature)
 
@@ -47,18 +50,35 @@ struct ServerStats {
 };
 
 void MyMesh::addPost(ClientInfo *client, const char *postData) {
-  // TODO: suggested postData format: <title>/<descrption>
-  posts[next_post_idx].author = client->id; // add to cyclic queue
-  StrHelper::strncpy(posts[next_post_idx].text, postData, MAX_POST_TEXT_LEN);
+  storePost(client->id, postData);
+}
 
-  posts[next_post_idx].post_timestamp = getRTCClock()->getCurrentTimeUnique();
+void MyMesh::addSystemPost(const char *postData) {
+  if (!postData || postData[0] == 0) return;
+
+  MESH_DEBUG_PRINTLN("room.post: addSystemPost: %s", postData);
+
+  storePost(self_id, postData);
+}
+
+void MyMesh::storePost(const mesh::Identity &author, const char *postData) {
+  int idx = next_post_idx;
+  // TODO: suggested postData format: <title>/<descrption>
+  posts[idx].author = author; // add to cyclic queue
+  StrHelper::strncpy(posts[idx].text, postData, MAX_POST_TEXT_LEN);
+
+  posts[idx].post_timestamp = getRTCClock()->getCurrentTimeUnique();
+  MESH_DEBUG_PRINTLN("room.post: storePost idx=%d text=%s", idx, posts[idx].text);
+  MESH_DEBUG_PRINTLN("room.post: timestamp=%u", posts[idx].post_timestamp);
   next_post_idx = (next_post_idx + 1) % MAX_UNSYNCED_POSTS;
 
   next_push = futureMillis(PUSH_NOTIFY_DELAY_MILLIS);
   _num_posted++; // stats
+  MESH_DEBUG_PRINTLN("room.post: next_post_idx=%d num_posted=%d push scheduled", next_post_idx, _num_posted);
 }
 
 void MyMesh::pushPostToClient(ClientInfo *client, PostInfo &post) {
+  MESH_DEBUG_PRINTLN("room.post: pushPostToClient text=%s", post.text);
   int len = 0;
   memcpy(&reply_data[len], &post.post_timestamp, 4);
   len += 4; // this is a PAST timestamp... but should be accepted by client
@@ -830,7 +850,6 @@ MyMesh::MyMesh(mesh::MainBoard &board, mesh::Radio &radio, mesh::MillisecondCloc
   recv_pkt_region = NULL;
 
   // defaults
-  memset(&_prefs, 0, sizeof(_prefs));
   _prefs.airtime_factor = 1.0;   // one half
   _prefs.rx_delay_base = 0.0f;   // off by default, was 10.0
   _prefs.tx_delay_factor = 0.5f; // was 0.25f;
@@ -861,6 +880,14 @@ MyMesh::MyMesh(mesh::MainBoard &board, mesh::Radio &radio, mesh::MillisecondCloc
   _prefs.gps_enabled = 0;
   _prefs.gps_interval = 0;
   _prefs.advert_loc_policy = ADVERT_LOC_PREFS;
+
+#if defined(USE_SX1262) || defined(USE_SX1268)
+#ifdef SX126X_RX_BOOSTED_GAIN
+  _prefs.rx_boosted_gain = SX126X_RX_BOOSTED_GAIN;
+#else
+  _prefs.rx_boosted_gain = 1; // enabled by default;
+#endif
+#endif
   _prefs.radio_fem_rxgain = 1;
 
   // Observer defaults (alert.*, etc.) moved to applyMQTTDefaults() — they live
@@ -897,6 +924,7 @@ MyMesh::MyMesh(mesh::MainBoard &board, mesh::Radio &radio, mesh::MillisecondCloc
   neighbor_discover_request = NULL;
   next_neighbors_publish = 0;
   self_scopes_buf[0] = 0;
+  self_default_scope_buf[0] = 0;
   neighbor_discover_origin[0] = 0;
   memset(neighbours, 0, sizeof(neighbours));
 #endif
@@ -935,6 +963,7 @@ void MyMesh::begin(FILESYSTEM *fs) {
 
   radio_driver.setParams(_prefs.freq, _prefs.bw, _prefs.sf, _prefs.cr);
   radio_driver.setTxPower(_prefs.tx_power_dbm);
+  radio_driver.setRxBoostedGainMode(_prefs.rx_boosted_gain);
   board.setLoRaFemLnaEnabled(_prefs.radio_fem_rxgain);   // LoRa FEM LNA (FEM boards only)
 
   updateAdvertTimer();
@@ -1105,6 +1134,10 @@ void MyMesh::dumpLogFile() {
 
 void MyMesh::setTxPower(int8_t power_dbm) {
   radio_driver.setTxPower(power_dbm);
+}
+
+bool MyMesh::setRxBoostedGain(bool enable) {
+  return radio_driver.setRxBoostedGainMode(enable);
 }
 
 void MyMesh::saveIdentity(const mesh::LocalIdentity &new_id) {
@@ -1444,8 +1477,17 @@ void MyMesh::handleCommand(uint32_t sender_timestamp, char *command, char *reply
     }
 #elif defined(WITH_MQTT_BRIDGE)
   } else if (memcmp(command, "discover.scopes", 15) == 0) {
-    strcpy(reply, "Err - not supported (requires PSRAM)");
+    strcpy(reply, "Err - neighbors not enabled in this build");
 #endif
+  } else if (strncmp(command, "room.post", 9) == 0) {
+    char* msg = command + 9;
+    while (*msg == ' ') msg++;
+    if (*msg == 0) {
+      snprintf(reply, MAX_POST_TEXT_LEN, "ERR empty message");
+    } else {
+      addSystemPost(msg);
+      snprintf(reply, MAX_POST_TEXT_LEN, "OK");
+    }
   } else{
     _cli.handleCommand(sender_timestamp, command, reply);  // common CLI commands
   }
@@ -1739,6 +1781,14 @@ uint32_t MyMesh::neighborDiscoverQueryTimeoutMs() const {
 
 void MyMesh::resetNeighborDiscoverJsonBudget() {
   getLocalScopes(self_scopes_buf, sizeof(self_scopes_buf));
+  {
+    // No default region means this node floods unscoped, i.e. the wildcard.
+    RegionEntry* def = region_map.getDefaultRegion();
+    const char* def_name = (def && def->name[0]) ? def->name : "*";
+    if (*def_name == '#') def_name++;  // match how self.scopes renders names
+    strncpy(self_default_scope_buf, def_name, sizeof(self_default_scope_buf) - 1);
+    self_default_scope_buf[sizeof(self_default_scope_buf) - 1] = 0;
+  }
   MQTTBridge::getEffectiveMqttOrigin(
     &_prefs, _cli.getObserverPrefs(),
     neighbor_discover_origin, sizeof(neighbor_discover_origin));
@@ -1754,7 +1804,7 @@ void MyMesh::resetNeighborDiscoverJsonBudget() {
   neighbor_discover_truncated = false;
   neighbor_discover_json_size = MQTTMessageBuilder::measureNeighborsMessageBase(
     neighbor_discover_origin, self_pubkey_hex, timestamp, self_scopes_buf,
-    neighbor_discover_count);
+    self_default_scope_buf, neighbor_discover_count);
 }
 
 // Account for one terminal result. The base measurement reserves maximum-width
@@ -1776,7 +1826,8 @@ bool MyMesh::completeNeighborDiscoverEntry() {
   size_t added = MQTTMessageBuilder::measureNeighborsMessageEntry(measured);
   if (neighbor_discover_publish_count > 0) added++;  // array comma
 
-  if (neighbor_discover_json_size + added >= MQTTBridge::NEIGHBORS_JSON_BUFFER_SIZE) {
+  if (neighbor_discover_json_size + added >= MQTTBridge::NEIGHBORS_JSON_BUFFER_SIZE ||
+      neighbor_discover_publish_count >= MQTTBridge::NEIGHBORS_MAX_PUBLISH_ENTRIES) {
     neighbor_discover_truncated = true;
     finishNeighborDiscover();
     return false;
@@ -1806,15 +1857,44 @@ bool MyMesh::handleNeighborDiscoverResponse(int overlay_idx, const uint8_t* data
   memcpy(entry.scopes, &data[8], scope_len);
   entry.scopes[scope_len] = 0;
   entry.status = ND_RESPONDED;
+  // A zero-hop reply is proof we heard this neighbour now, so re-stamp both the
+  // snapshot and the live table; a stamp taken before time sync heals here.
+  entry.heard_timestamp = getRTCClock()->getCurrentTime();
+  touchNeighbourHeard(entry.id, entry.heard_timestamp);
   return true;
 }
 
-// Publish-ordering: most recently heard first, then stronger SNR, then pubkey.
-// The JSON builder drops the tail if the buffer fills, so the head must be the
-// most useful entries.
+// Refresh a live neighbour's heard time only: a scope reply carries no advert
+// timestamp or SNR to update.
+void MyMesh::touchNeighbourHeard(const mesh::Identity& id, uint32_t heard_timestamp) {
+  for (int i = 0; i < MAX_NEIGHBOURS; i++) {
+    if (id.matches(neighbours[i].id)) {
+      neighbours[i].heard_timestamp = heard_timestamp;
+      return;
+    }
+  }
+}
+
+// A heard age is a wall-clock delta, so it only means something when both stamps
+// share a clock epoch. An entry heard before the clock was set holds the unset
+// default, which a synced clock turns into a ~2-year age; report those as
+// unknown instead. See UPSTREAM_BUGS.md for the monotonic fix.
+static bool neighborHeardAgeUsable(uint32_t heard_timestamp, uint32_t now_secs) {
+  if (heard_timestamp == 0 || now_secs < heard_timestamp) return false;
+  // Never synced: the stamp shares this clock's boot epoch, so the delta holds.
+  if (now_secs < MQTTConnectionPolicy::kSyncedClockEpoch) return true;
+  return heard_timestamp >= MQTTConnectionPolicy::kSyncedClockEpoch;
+}
+
+// Publish-ordering: usable ages first, then most recently heard, then stronger
+// SNR, then pubkey. The JSON builder drops the tail if the buffer fills, so the
+// head must be the most useful entries.
 static bool neighborPublishEntryComesBefore(
     const MQTTMessageBuilder::NeighborsMessageEntry& lhs,
     const MQTTMessageBuilder::NeighborsMessageEntry& rhs) {
+  if (lhs.heard_unknown != rhs.heard_unknown) {
+    return !lhs.heard_unknown;
+  }
   if (lhs.heard_secs_ago != rhs.heard_secs_ago) {
     return lhs.heard_secs_ago < rhs.heard_secs_ago;  // newer first
   }
@@ -1825,34 +1905,61 @@ static bool neighborPublishEntryComesBefore(
 }
 
 #if defined(ESP_PLATFORM)
+// Neighbors allocations prefer PSRAM where it exists and otherwise come from
+// internal DRAM, so MQTT_NEIGHBORS_WITHOUT_PSRAM boards can build the table too.
+#if defined(BOARD_HAS_PSRAM)
+static const uint32_t kNeighborsAllocCaps = MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT;
+#else
+static const uint32_t kNeighborsAllocCaps = MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT;
+#endif
+
+static void* neighborsAlloc(size_t size) {
+  if (size == 0) return nullptr;
+  void* p = heap_caps_malloc(size, kNeighborsAllocCaps);
+#if defined(BOARD_HAS_PSRAM)
+  if (!p) p = heap_caps_malloc(size, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+#endif
+  return p;
+}
+
+static void neighborsFree(void* ptr) {
+  if (ptr) heap_caps_free(ptr);
+}
+
 // ArduinoJson v7 JsonDocument has no real capacity cap (DynamicJsonDocument(N)
-// is a no-op shim). Keep the pool off internal DRAM and soft-cap peak growth to
-// the publish buffer size. used only rises on allocate — conservative for this
-// single-shot doc (overflow path removes+breaks, so no further growth after free).
+// is a no-op shim), so soft-cap peak pool growth to NEIGHBORS_DOC_POOL_BUDGET.
+// used only rises on allocate — conservative for this single-shot doc (overflow
+// path removes+breaks, so no further growth after free).
 struct NeighborsDocAllocator : ArduinoJson::Allocator {
   size_t used = 0;
-  static const size_t kBudget = MQTTBridge::NEIGHBORS_JSON_BUFFER_SIZE;
+  static const size_t kBudget = MQTTBridge::NEIGHBORS_DOC_POOL_BUDGET;
 
   void* allocate(size_t size) override {
     if (used >= kBudget || size > kBudget - used) return nullptr;
-    void* p = heap_caps_malloc(size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    void* p = neighborsAlloc(size);
     if (p) used += size;
     return p;
   }
 
   void deallocate(void* ptr) override {
-    heap_caps_free(ptr);
+    neighborsFree(ptr);
   }
 
   void* reallocate(void* ptr, size_t new_size) override {
     size_t old_size = ptr ? heap_caps_get_allocated_size(ptr) : 0;
     size_t next_used = (used >= old_size) ? (used - old_size) : 0;
     if (next_used >= kBudget || new_size > kBudget - next_used) return nullptr;
-    void* p = heap_caps_realloc(ptr, new_size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    void* p = heap_caps_realloc(ptr, new_size, kNeighborsAllocCaps);
+#if defined(BOARD_HAS_PSRAM)
+    if (!p) p = heap_caps_realloc(ptr, new_size, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+#endif
     if (p) used = next_used + new_size;
     return p;
   }
 };
+#else
+static void* neighborsAlloc(size_t size) { return size ? malloc(size) : nullptr; }
+static void neighborsFree(void* ptr) { free(ptr); }
 #endif
 
 // Build the neighbors-table JSON and hand it to the bridge, then reschedule.
@@ -1863,79 +1970,69 @@ void MyMesh::finishNeighborDiscover() {
   char timestamp[40];
   MQTTMessageBuilder::formatIsoTimestampForMqtt(getRTCClock()->getCurrentTime(), 0, nullptr, timestamp, sizeof(timestamp));
 
-  char pubkey_hex[MAX_NEIGHBOURS][65];
-  MQTTMessageBuilder::NeighborsMessageEntry entries[MAX_NEIGHBOURS];
-  uint32_t now_secs = getRTCClock()->getCurrentTime();
+  // The entry table plus one hex string each reaches ~4.5 KB at MAX_NEIGHBOURS,
+  // which does not fit the mesh loop task's 8 KB stack, so both share a single
+  // heap block sized to this pass. Publishing is skipped if either alloc fails.
+  const int publish_count = neighbor_discover_publish_count;
+  const size_t hex_size = PUB_KEY_SIZE * 2 + 1;
+  const size_t entries_bytes =
+    sizeof(MQTTMessageBuilder::NeighborsMessageEntry) * publish_count;
+  void* scratch = neighborsAlloc(entries_bytes + hex_size * publish_count);
+  char* json_buf = (char*)neighborsAlloc(MQTTBridge::NEIGHBORS_JSON_BUFFER_SIZE);
 
-  for (int i = 0; i < neighbor_discover_publish_count; i++) {
-    auto& entry = neighbor_discover[i];
-    mesh::Utils::toHex(pubkey_hex[i], entry.id.pub_key, PUB_KEY_SIZE);
-    entries[i].pubkey_hex = pubkey_hex[i];
-    entries[i].snr = entry.snr / 4.0f;
-    entries[i].heard_secs_ago = (entry.heard_timestamp > 0 && now_secs >= entry.heard_timestamp)
-      ? (now_secs - entry.heard_timestamp) : 0;
-    entries[i].scopes = entry.scopes;
-    switch (entry.status) {
-      case ND_RESPONDED:   entries[i].status = "responded"; break;
-      case ND_SEND_FAILED: entries[i].status = "send_failed"; break;
-      default:             entries[i].status = "timeout"; break;
+  if (json_buf && (scratch || publish_count == 0)) {
+    auto* entries = (MQTTMessageBuilder::NeighborsMessageEntry*)scratch;
+    char* pubkey_hex = (char*)scratch + entries_bytes;
+    uint32_t now_secs = getRTCClock()->getCurrentTime();
+
+    for (int i = 0; i < publish_count; i++) {
+      auto& entry = neighbor_discover[i];
+      char* hex = &pubkey_hex[i * hex_size];
+      mesh::Utils::toHex(hex, entry.id.pub_key, PUB_KEY_SIZE);
+      entries[i].pubkey_hex = hex;
+      entries[i].snr = entry.snr / 4.0f;
+      bool heard_known = neighborHeardAgeUsable(entry.heard_timestamp, now_secs);
+      entries[i].heard_unknown = !heard_known;
+      entries[i].heard_secs_ago = heard_known ? (now_secs - entry.heard_timestamp) : 0;
+      entries[i].scopes = entry.scopes;
+      switch (entry.status) {
+        case ND_RESPONDED:   entries[i].status = "responded"; break;
+        case ND_SEND_FAILED: entries[i].status = "send_failed"; break;
+        default:             entries[i].status = "timeout"; break;
+      }
+    }
+
+    // insertion sort: most useful first (JSON builder drops the tail on overflow)
+    for (int i = 1; i < publish_count; i++) {
+      MQTTMessageBuilder::NeighborsMessageEntry entry = entries[i];
+      int j = i;
+      while (j > 0 && neighborPublishEntryComesBefore(entry, entries[j - 1])) {
+        entries[j] = entries[j - 1];
+        j--;
+      }
+      entries[j] = entry;
+    }
+
+#if defined(ESP_PLATFORM)
+    NeighborsDocAllocator doc_alloc;
+    JsonDocument doc(&doc_alloc);
+#else
+    JsonDocument doc;
+#endif
+    int json_len = MQTTMessageBuilder::buildNeighborsMessage(
+      doc, neighbor_discover_origin, self_pubkey_hex, timestamp, self_scopes_buf,
+      self_default_scope_buf, entries, publish_count,
+      json_buf, MQTTBridge::NEIGHBORS_JSON_BUFFER_SIZE,
+      neighbor_discover_count, neighbor_discover_queried_count,
+      neighbor_discover_truncated);
+
+    if (json_len > 0 && bridge) {
+      bridge->requestPublishNeighbors(json_buf, (size_t)json_len);
     }
   }
 
-  // insertion sort: most useful first (JSON builder drops the tail on overflow)
-  for (int i = 1; i < neighbor_discover_publish_count; i++) {
-    MQTTMessageBuilder::NeighborsMessageEntry entry = entries[i];
-    int j = i;
-    while (j > 0 && neighborPublishEntryComesBefore(entry, entries[j - 1])) {
-      entries[j] = entries[j - 1];
-      j--;
-    }
-    entries[j] = entry;
-  }
-
-#if defined(ESP_PLATFORM)
-  char* json_buf = (char*)heap_caps_malloc(MQTTBridge::NEIGHBORS_JSON_BUFFER_SIZE, MALLOC_CAP_SPIRAM);
-#else
-  char* json_buf = (char*)malloc(MQTTBridge::NEIGHBORS_JSON_BUFFER_SIZE);
-#endif
-  if (!json_buf) {
-    neighbor_discover_active = false;
-    neighbor_discover_count = 0;
-    neighbor_discover_next = 0;
-    neighbor_discover_publish_count = 0;
-    neighbor_discover_queried_count = 0;
-    neighbor_discover_json_size = 0;
-    neighbor_discover_truncated = false;
-    neighbor_discover_until = 0;
-    neighbor_discover_request = NULL;
-    if (_cli.getObserverPrefs()->mqtt_neighbors_enabled) {
-      next_neighbors_publish = futureMillis(_cli.getObserverPrefs()->mqtt_neighbors_interval);
-    }
-    return;
-  }
-
-#if defined(ESP_PLATFORM)
-  NeighborsDocAllocator doc_alloc;
-  JsonDocument doc(&doc_alloc);
-#else
-  JsonDocument doc;
-#endif
-  int json_len = MQTTMessageBuilder::buildNeighborsMessage(
-    doc, neighbor_discover_origin, self_pubkey_hex, timestamp, self_scopes_buf,
-    entries, neighbor_discover_publish_count,
-    json_buf, MQTTBridge::NEIGHBORS_JSON_BUFFER_SIZE,
-    neighbor_discover_count, neighbor_discover_queried_count,
-    neighbor_discover_truncated);
-
-  if (json_len > 0 && bridge) {
-    bridge->requestPublishNeighbors(json_buf, (size_t)json_len);
-  }
-
-#if defined(ESP_PLATFORM)
-  heap_caps_free(json_buf);
-#else
-  free(json_buf);
-#endif
+  neighborsFree(scratch);
+  neighborsFree(json_buf);
 
   neighbor_discover_active = false;
   neighbor_discover_count = 0;
@@ -2007,9 +2104,12 @@ void MyMesh::loopNeighborDiscover() {
   }
 }
 
-// Shared precondition for starting a discovery: PSRAM present + bridge running.
+// Shared precondition for starting a discovery: usable buffers + bridge running.
+// PSRAM builds size their neighbors buffers for PSRAM, so a board whose PSRAM
+// failed to init must not silently spend that much internal DRAM here.
+// MQTT_NEIGHBORS_WITHOUT_PSRAM builds are already sized for internal DRAM.
 bool MyMesh::neighborDiscoverReady(char* reply) {
-#if defined(ESP_PLATFORM)
+#if defined(ESP_PLATFORM) && defined(BOARD_HAS_PSRAM)
   if (!psramFound()) { strcpy(reply, "Err - PSRAM not available"); return false; }
 #endif
   if (!bridge || !bridge->isRunning()) { strcpy(reply, "Err - MQTT bridge not running"); return false; }

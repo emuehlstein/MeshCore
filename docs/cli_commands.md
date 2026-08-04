@@ -29,11 +29,24 @@ This document provides an overview of CLI commands that can be sent to MeshCore 
 **Usage:** 
 - `reboot`
 
+**Note:** No reply is sent.
+
+---
+
+### Power-off the node
+**Usage:**
+- `poweroff`, or
+- `shutdown`
+
+**Note:** No reply is sent.
+
 ---
 
 ### Reset the clock and reboot
 **Usage:**
 - `clkreboot`
+
+**Note:** No reply is sent.
 
 ---
 
@@ -123,9 +136,10 @@ scopes and publishes the assembled table to the MQTT `neighbors` topic once.
 **Usage:**
 - `discover.scopes`
 
-**Note:** Requires a PSRAM board with the MQTT bridge running. On non-PSRAM MQTT
-builds it replies `Err - not supported (requires PSRAM)`. If a `discover.neighbors`
-refresh is already in flight, the scope pass is queued behind it.
+**Note:** Requires an MQTT observer build with the neighbors feature compiled in
+(all PSRAM boards, plus non-PSRAM boards built with `MQTT_NEIGHBORS_WITHOUT_PSRAM`).
+Elsewhere it replies `Err - neighbors not enabled in this build`. If a
+`discover.neighbors` refresh is already in flight, the scope pass is queued behind it.
 
 ---
 
@@ -305,7 +319,7 @@ refresh is already in flight, the scope pass is queued behind it.
 
 **Default:** Varies by board
 
-**Note:** Max length varies. If a location is set, the max length is 24 bytes; 32 otherwise. Emoji and unicode characters may take more than one byte.
+**Note:** Advertised names can use up to 23 bytes when location is included and 31 bytes otherwise. Emoji and Unicode characters may take more than one byte. Names that exceed the available advert space are truncated at a valid UTF-8 code point boundary.
 
 ---
 
@@ -688,10 +702,21 @@ refresh is already in flight, the scope pass is queued behind it.
 **Parameters:**
 - `value`: Maximum flood hop count (0-64) for a packet without a scope (no region set)
 
-**Default:** `0xFF` - indicates it hasn't been set, will track flood.max until it is.
+**Default:** `64` - (`0xFF` indicates it hasn't been set, will track flood.max until it is.)
 
 **Note:** An alternative to `region denyf *`, setting `flood.max.unscoped` to a lower value such as `3` would allow for local unscoped messages to propagate, while preventing noisy neighbors from flooding a local region.
 
+---
+
+#### Limit the number of hops for an advert flood message
+**Usage:**
+- `get flood.max.advert`
+- `set flood.max.advert <value>`
+
+**Parameters:**
+- `value`: Maximum flood hop count (0-64) for an advert packet
+
+**Default:** `8`
 
 ---
 
@@ -1136,8 +1161,12 @@ region save
 
 **Default:** `off`
 
-> **Note:** Requires a PSRAM board. On non-PSRAM MQTT builds this replies
-> `Err - not supported (requires PSRAM)`. The setting is read live by the mesh
+> **Note:** Requires a build with the neighbors feature compiled in (all PSRAM
+> boards, plus non-PSRAM boards built with `MQTT_NEIGHBORS_WITHOUT_PSRAM`);
+> elsewhere this replies `Err - neighbors not enabled in this build`. Non-PSRAM
+> builds publish at most 20 neighbours per pass to bound internal-DRAM use, and
+> set `truncated` with the true `total_neighbors` when the table is larger.
+> The setting is read live by the mesh
 > loop — no restart required; enabling it triggers a discovery on the next pass.
 > While enabled, `get mqtt.status` gains a trailing `nbr: <next>/<last>` field
 > (time to next publish, and how the last publish went).

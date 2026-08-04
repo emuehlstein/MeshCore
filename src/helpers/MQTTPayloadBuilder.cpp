@@ -191,6 +191,7 @@ static JsonArray buildNeighborsMessageBase(
   const char* origin_id,
   const char* timestamp,
   const char* self_scopes,
+  const char* self_default_scope,
   int total_neighbors,
   int queried_neighbors,
   bool truncated
@@ -208,6 +209,7 @@ static JsonArray buildNeighborsMessageBase(
 
   JsonObject self = root["self"].to<JsonObject>();
   self["scopes"] = self_scopes ? self_scopes : "";
+  self["default_scope"] = self_default_scope ? self_default_scope : "";
   return root["neighbors"].to<JsonArray>();
 }
 
@@ -218,7 +220,11 @@ static void addNeighborsMessageEntry(
   JsonObject nb = arr.add<JsonObject>();
   nb["pubkey"] = neighbor.pubkey_hex;
   nb["snr"] = neighbor.snr;
-  nb["heard_secs_ago"] = neighbor.heard_secs_ago;
+  if (neighbor.heard_unknown) {
+    nb["heard_secs_ago"] = nullptr;  // age unknown, not zero
+  } else {
+    nb["heard_secs_ago"] = neighbor.heard_secs_ago;
+  }
   nb["scopes"] = neighbor.scopes ? neighbor.scopes : "";
   nb["status"] = neighbor.status;
 }
@@ -228,11 +234,12 @@ size_t MQTTPayloadBuilder::measureNeighborsMessageBase(
   const char* origin_id,
   const char* timestamp,
   const char* self_scopes,
+  const char* self_default_scope,
   int total_neighbors
 ) {
   JsonDocument doc;
   buildNeighborsMessageBase(
-    doc, origin, origin_id, timestamp, self_scopes,
+    doc, origin, origin_id, timestamp, self_scopes, self_default_scope,
     total_neighbors, total_neighbors, false);
   return measureJson(doc);
 }
@@ -253,6 +260,7 @@ int MQTTPayloadBuilder::buildNeighborsMessage(
   const char* origin_id,
   const char* timestamp,
   const char* self_scopes,
+  const char* self_default_scope,
   const NeighborsMessageEntry* neighbors,
   int neighbor_count,
   char* buffer,
@@ -264,7 +272,7 @@ int MQTTPayloadBuilder::buildNeighborsMessage(
   if (!buffer || buffer_size == 0) return 0;
 
   JsonArray arr = buildNeighborsMessageBase(
-    doc, origin, origin_id, timestamp, self_scopes,
+    doc, origin, origin_id, timestamp, self_scopes, self_default_scope,
     total_neighbors, queried_neighbors, truncated);
   if (doc.overflowed() || arr.isNull() || measureJson(doc) >= buffer_size) return 0;
 
