@@ -147,6 +147,8 @@ below documents the current build.
 | `meshcore-ca-1` | `wss://mqtt1.meshcore.ca:443/mqtt` | JWT | — |
 | `meshcore-ca-2` | `wss://mqtt2.meshcore.ca:443/mqtt` | JWT | — |
 | `meshcore-fi` | `wss://mc-mqtt.meshcore.fi:443/` | JWT | — |
+| `okimesh-1` | `wss://mqtt1.okimesh.org:9002/mqtt` | JWT | — |
+| `okimesh-2` | `wss://mqtt2.okimesh.org:9002/mqtt` | JWT | — |
 | `inwmesh` | `mqtts://scope.inwmesh.org:8883` | User/pass (per slot) | `set mqttN.username` + `set mqttN.password` |
 | `bostonmesh` | `wss://mqttmc01.bostonme.sh:443/mqtt` | JWT | — |
 | `rflab` | `wss://mqtt.rflab.io:443` | JWT | — |
@@ -156,6 +158,9 @@ below documents the current build.
 | `meshtexas` | `wss://mqtt.meshtexas.org:443/mqtt` | JWT | — |
 | `mesh-chaun14` | `mqtt://mqtt.mesh.chaun14.fr:1884` | User/pass (username is the device public key) | `set mqttN.password` |
 | `wcmesh` | `wss://mqtt.wcmesh.com:443` | JWT | — |
+| `atvirastinklas` | `wss://mqtt-mc.atvirastinklas.lt:443` | JWT | — |
+| `gomesh` | `wss://mqtt.gomesh.dev:443` | JWT | — |
+| `idahomesh` | `wss://mqtt.idahomesh.org:443/mqtt` | JWT | — |
 | `custom` | your own broker | User/pass, or JWT when `mqttN.audience` is set | `set mqttN.server` (see [custom broker setup](#custom-brokers)) |
 | `none` | (slot disabled) | — | — |
 
