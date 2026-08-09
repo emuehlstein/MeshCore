@@ -105,9 +105,13 @@ static inline void applyMQTTDefaults(MQTTPrefs* prefs) {
   prefs->alert_mqtt_minutes = 240;
   prefs->alert_min_interval_min = 60;
 
-  // Neighbors publishing defaults off; a defaulted tail is a valid 24h interval
-  // (not 0) so an in-lineage upgrade from a pre-neighbors payload is sane.
-  prefs->mqtt_neighbors_enabled = 0;
+  // Chicagoland default: neighbors publishing ON (fork-local divergence from
+  // upstream, which defaults off). Every chioff observer target compiles in
+  // WITH_MQTT_NEIGHBORS -- PSRAM boards implicitly, Heltec V3 via the explicit
+  // MQTT_NEIGHBORS_WITHOUT_PSRAM opt-in -- so this is safe across our matrix.
+  // A defaulted tail is still a valid 24h interval (not 0) so an in-lineage
+  // upgrade from a pre-neighbors payload stays sane.
+  prefs->mqtt_neighbors_enabled = 1;
   prefs->mqtt_neighbors_interval = MQTT_NEIGHBORS_DEFAULT_INTERVAL_MS;
 }
 
