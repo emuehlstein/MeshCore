@@ -332,6 +332,15 @@ build_chicagoland_firmwares() {
   build_firmware "Station_G3_ESP32_dedicated_observer_mqtt"
   build_firmware "Station_G3_ESP32_room_server_observer_mqtt"
 
+  # Heltec Wireless Tracker v1.1 / v2 (no PSRAM, MQTT_NEIGHBORS_WITHOUT_PSRAM=1, MAX_NEIGHBOURS=50)
+  # NOTE: not yet validated on hardware — see PR adding these envs.
+  build_firmware "heltec_tracker_v1_1_repeater_observer_mqtt"
+  build_firmware "heltec_tracker_v1_1_dedicated_observer_mqtt"
+  build_firmware "heltec_tracker_v1_1_room_server_observer_mqtt"
+  build_firmware "heltec_tracker_v2_repeater_observer_mqtt"
+  build_firmware "heltec_tracker_v2_dedicated_observer_mqtt"
+  build_firmware "heltec_tracker_v2_room_server_observer_mqtt"
+
 }
 
 build_kiss_modem_firmwares() {
