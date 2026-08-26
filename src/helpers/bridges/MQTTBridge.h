@@ -11,6 +11,7 @@
 #include "helpers/MQTTPacketFilter.h"
 #include "helpers/MQTTPresets.h"
 #include "helpers/MQTTLifecycle.h"
+#include "helpers/AlertFaultPolicy.h"
 #include <atomic>
 
 #ifdef WITH_SNMP
@@ -409,10 +410,20 @@ private:
   unsigned long _last_wifi_check;
   wl_status_t _last_wifi_status;
   bool _wifi_status_initialized;
-  unsigned long _wifi_disconnected_time;  // 0 when connected
+  // Packed OutageSnapshot; Core 0 (event + MQTT task) stores, Core 1 loads.
+  std::atomic<uint64_t> _wifi_outage_bits;
   unsigned long _last_wifi_reconnect_attempt;
   uint8_t _wifi_reconnect_backoff_attempt;  // 0..5 → 15s, 30s, 60s, 120s, 300s; reset on connect
   unsigned long _last_slot_reconnect_ms;   // guards against concurrent TLS handshakes (15 s inter-slot gap)
+
+  AlertFaultPolicy::OutageSnapshot wifiOutage() const {
+    return AlertFaultPolicy::unpackOutageSnapshot(
+        _wifi_outage_bits.load(std::memory_order_acquire));
+  }
+  void setWifiOutage(AlertFaultPolicy::OutageSnapshot snap) {
+    _wifi_outage_bits.store(AlertFaultPolicy::packOutageSnapshot(snap),
+                            std::memory_order_release);
+  }
 
   // Optional pointers for collecting stats internally (set by mesh if available)
   mesh::Dispatcher* _dispatcher;  // For air times and errors
@@ -442,7 +453,10 @@ private:
   bool ensureSlotClient(int index);    // Allocate this slot's persistent client + callbacks on first use
   bool ensureSlotAuthToken(int index); // Allocate this slot's JWT token buffer on first token creation
   void releaseSlotAuthToken(int index);// Free the token buffer (only with the client — see MQTTSlot)
-  void destroySlotClients();           // Delete all persistent clients (shutdown only)
+  // force=true stops each client without waiting for its DISCONNECTED event. Only the
+  // dirty-stop fallback passes it: disconnect()'s wait is unbounded, so a client already
+  // wedged in mbedTLS would block the caller — MyMesh::loop() — indefinitely.
+  void destroySlotClients(bool force = false);  // Delete all persistent clients (shutdown only)
   bool setupSlot(int index);           // Configure and connect the slot; false = not activated
   // Single definition of "this slot holds one of the _max_active_slots positions":
   // it is enabled and has been through a successful setupSlot(). Startup, the
@@ -450,7 +464,8 @@ private:
   // exceeded by one route while another enforces it.
   int activatedSlotCount() const;
   bool canActivateSlot(int index) const;
-  void teardownSlot(int index);        // Disconnect the slot's client (keeps the object alive)
+  // force as in destroySlotClients(): skip the unbounded wait, dirty-stop path only.
+  void teardownSlot(int index, bool force = false);  // Disconnect the slot's client (keeps the object alive)
   // Reconnect a slot, starting it instead when the client is stopped (reconnect() is a
   // no-op on a stopped client). See the definition.
   void reconnectSlotClient(int index);
@@ -638,6 +653,15 @@ public:
   bool canFlashAfterStop() const { return _lifecycle.mayBeginFlash(); }
 
   static unsigned long getWifiConnectedAtMillis();
+
+  /**
+   * Current WiFi outage snapshot for AlertReporter: down, started_ms, and the
+   * initiating disconnect reason. Distinct from getLastWifiDisconnectTime() /
+   * getLastWifiDisconnectReason(), which follow the most recent ESP-IDF
+   * DISCONNECTED event and are overwritten by STA-backoff WiFi.disconnect()
+   * (reason 8 / ASSOC_LEAVE).
+   */
+  AlertFaultPolicy::OutageSnapshot getWifiOutageSnapshot() const { return wifiOutage(); }
 
   /**
    * Per-slot outage accessors used by AlertReporter to detect prolonged

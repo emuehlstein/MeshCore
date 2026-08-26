@@ -559,9 +559,11 @@ void MQTTBridge::formatSlotDiagReply(char* buf, size_t bufsize, int slot_index) 
         replyAppendf(buf, bufsize, &pos, ", tls:0x%04X", (unsigned)slot.last_tls_err);
       }
     }
-    // mbedTLS stack error (shown as negative hex per convention)
+    // mbedTLS stack error (shown as negative hex per convention). ESP-IDF stores the
+    // magnitude, not the negative mbedTLS code, so normalise instead of negating.
     if (slot.last_tls_stack_err != 0) {
-      replyAppendf(buf, bufsize, &pos, ", mbedtls:-0x%04X", (unsigned)(-slot.last_tls_stack_err));
+      replyAppendf(buf, bufsize, &pos, ", mbedtls:-0x%04X",
+                   (unsigned)mbedtlsErrorMagnitude(slot.last_tls_stack_err));
     }
     // Socket errno
     if (slot.last_sock_errno != 0) {
@@ -660,7 +662,7 @@ MQTTBridge::MQTTBridge(NodePrefs *prefs, MQTTPrefs *obs, mesh::PacketManager *mg
       _snmp_agent(nullptr),
 #endif
       _last_wifi_check(0), _last_wifi_status(WL_DISCONNECTED), _wifi_status_initialized(false),
-      _wifi_disconnected_time(0), _last_wifi_reconnect_attempt(0), _wifi_reconnect_backoff_attempt(0),
+      _wifi_outage_bits{0}, _last_wifi_reconnect_attempt(0), _wifi_reconnect_backoff_attempt(0),
       _last_slot_reconnect_ms(0)
 #ifdef ESP_PLATFORM
       , _packet_queue_handle(nullptr), _mqtt_task_handle(nullptr),
@@ -938,6 +940,21 @@ void MQTTBridge::begin() {
           _slots[i].enabled = false;
         }
       }
+    } else {
+      // Prefs say this slot is off. Without this the slot keeps whatever the previous
+      // begin() left in RAM, so a restart resurrects a broker the operator disabled and
+      // reconnects to it with the old credentials. teardownSlot() deliberately preserves
+      // enabled/preset, and the constructor only clears them once, so nothing else does.
+      // Config fields only: the client belongs to destroySlotClients() and the token
+      // buffer to releaseSlotAuthToken(), and clearing either here would strand a pointer
+      // esp-mqtt still holds.
+      _slots[i].enabled = false;
+      _slots[i].preset = nullptr;
+      _slots[i].host[0] = '\0';
+      _slots[i].username[0] = '\0';
+      _slots[i].password[0] = '\0';
+      _slots[i].audience[0] = '\0';
+      _slots[i].port = 0;
     }
   }
 
@@ -1158,8 +1175,10 @@ void MQTTBridge::LifecycleOps::releaseResources() {
     if (b->_mqtt_task_handle != nullptr) {
       vTaskDelete(b->_mqtt_task_handle);
     }
-    for (int i = 0; i < RUNTIME_MQTT_SLOTS; i++) b->teardownSlot(i);
-    b->destroySlotClients();
+    // force: the task is already gone and the client is presumed wedged, so waiting on a
+    // DISCONNECTED event that may never arrive would hang this task (the app loop) forever.
+    for (int i = 0; i < RUNTIME_MQTT_SLOTS; i++) b->teardownSlot(i, /*force=*/true);
+    b->destroySlotClients(/*force=*/true);
   }
   // Clean path (or a task that acked right at the deadline): the MQTT task
   // already disconnected/deleted its clients on Core 0 and self-terminated, so
@@ -1238,16 +1257,23 @@ void MQTTBridge::initializeWiFiInTask() {
       switch(event) {
         case ARDUINO_EVENT_WIFI_STA_GOT_IP:
           MQTT_DEBUG_PRINTLN("WiFi connected: %s", IPAddress(info.got_ip.ip_info.ip.addr).toString().c_str());
+          setWifiOutage(AlertFaultPolicy::applyWifiGotIp(wifiOutage()));
+          _wifi_reconnect_backoff_attempt = 0;
           // Set flag to trigger NTP sync from loop() instead of doing it here
           if (!_ntp_synced && !_ntp_sync_pending) {
             _ntp_sync_pending = true;
           }
           break;
-        case ARDUINO_EVENT_WIFI_STA_DISCONNECTED:
-          s_wifi_disconnect_reason = info.wifi_sta_disconnected.reason;
-          s_wifi_disconnect_time = millis();
+        case ARDUINO_EVENT_WIFI_STA_DISCONNECTED: {
+          const uint8_t reason = info.wifi_sta_disconnected.reason;
+          const unsigned long t = millis();
+          s_wifi_disconnect_reason = reason;
+          s_wifi_disconnect_time = t;
+          setWifiOutage(AlertFaultPolicy::applyWifiDisconnectEvent(
+              (uint32_t)t, reason, wifiOutage()));
           MQTT_DEBUG_PRINTLN("WiFi disconnected: reason %d", s_wifi_disconnect_reason);
           break;
+        }
         default:
           break;
       }
@@ -1707,11 +1733,17 @@ void MQTTBridge::releaseSlotAuthToken(int index) {
   slot.last_token_renewal = 0;
 }
 
-void MQTTBridge::destroySlotClients() {
+void MQTTBridge::destroySlotClients(bool force) {
   for (int i = 0; i < RUNTIME_MQTT_SLOTS; i++) {
     MQTTSlot& slot = _slots[i];
     if (slot.client != nullptr) {
-      if (slot.client->connected()) {
+      // force is deliberately NOT gated on connected(). The state it exists for — a client
+      // that already took its DISCONNECTED callback and is now stuck inside
+      // esp_mqtt_client_stop() — reports not-connected, so gating skipped the stop exactly
+      // when it mattered and left the object to be deleted from under a live IDF task.
+      if (force) {
+        slot.client->forceStop();
+      } else if (slot.client->connected()) {
         slot.client->disconnect();
       }
       #ifdef ESP_PLATFORM
@@ -1969,12 +2001,18 @@ bool MQTTBridge::setupSlot(int index) {
 // the client object alive so a subsequent setupSlot() can reuse its mbedTLS
 // context. This is called both on reconfigure (preset change) and at shutdown;
 // destruction of the underlying client happens once in destroySlotClients().
-void MQTTBridge::teardownSlot(int index) {
+void MQTTBridge::teardownSlot(int index, bool force) {
   if (index < 0 || index >= RUNTIME_MQTT_SLOTS) return;
   MQTTSlot& slot = _slots[index];
 
-  if (slot.client && slot.client->connected()) {
-    slot.client->disconnect();
+  // As in destroySlotClients(): force is not gated on connected(), because the wedged
+  // mid-stop state it exists for already reports not-connected.
+  if (slot.client && (force || slot.client->connected())) {
+    if (force) {
+      slot.client->forceStop();
+    } else {
+      slot.client->disconnect();
+    }
     #ifdef ESP_PLATFORM
     vTaskDelay(pdMS_TO_TICKS(50));
     #else
@@ -2764,11 +2802,19 @@ bool MQTTBridge::handleWiFiConnection(unsigned long now) {
   if (!_wifi_status_initialized) {
     _last_wifi_status = current_wifi_status;
     _wifi_status_initialized = true;
-    if (current_wifi_status != WL_CONNECTED) {
-      _wifi_disconnected_time = now;
-    }
+    setWifiOutage(AlertFaultPolicy::applyWifiStatus(
+        (uint32_t)now, current_wifi_status == WL_CONNECTED, wifiOutage(), false));
   }
   if (now - _last_wifi_check <= 10000) {
+    // Events own the snapshot between 10 s polls. If STA is associated again
+    // and GOT_IP was missed, still close the outage so a flap contained
+    // between polls does not look like one continuous downtime.
+    if (current_wifi_status == WL_CONNECTED) {
+      AlertFaultPolicy::OutageSnapshot snap = wifiOutage();
+      if (snap.down) {
+        setWifiOutage(AlertFaultPolicy::applyWifiGotIp(snap));
+      }
+    }
     return false;
   }
   _last_wifi_check = now;
@@ -2776,7 +2822,8 @@ bool MQTTBridge::handleWiFiConnection(unsigned long now) {
   if (current_wifi_status == WL_CONNECTED) {
     if (_last_wifi_status != WL_CONNECTED) {
       transitioned_to_connected = true;
-      _wifi_disconnected_time = 0;
+      setWifiOutage(AlertFaultPolicy::applyWifiStatus(
+          (uint32_t)now, true, wifiOutage(), true));
       s_wifi_connected_at = now;
       _wifi_reconnect_backoff_attempt = 0;
       #ifdef ESP_PLATFORM
@@ -2802,8 +2849,11 @@ bool MQTTBridge::handleWiFiConnection(unsigned long now) {
     }
     _last_wifi_status = WL_CONNECTED;
   } else {
-    if (_last_wifi_status == WL_CONNECTED) {
-      _wifi_disconnected_time = now;
+    const bool last_connected = (_last_wifi_status == WL_CONNECTED);
+    AlertFaultPolicy::OutageSnapshot snap = AlertFaultPolicy::applyWifiStatus(
+        (uint32_t)now, false, wifiOutage(), true);
+    setWifiOutage(snap);
+    if (last_connected) {
       s_wifi_connected_at = 0;
       // Disconnect all slot clients when WiFi drops
       for (int i = 0; i < RUNTIME_MQTT_SLOTS; i++) {
@@ -2811,13 +2861,13 @@ bool MQTTBridge::handleWiFiConnection(unsigned long now) {
           _slots[i].client->disconnect();
         }
       }
-    } else if (_wifi_disconnected_time > 0) {
+    } else if (snap.down) {
       // Backoff ladder + wrap-safe timing live in MQTTConnectionPolicy (Phase 6),
       // exercised by host tests. Behavior is unchanged: both the link-down
       // duration and the since-last-attempt interval must clear the current rung
       // (elapsedMs is the wrap-safe form of the old ULONG_MAX branch).
       if (MQTTConnectionPolicy::wifiReconnectDue(
-              (uint32_t)now, (uint32_t)_wifi_disconnected_time,
+              (uint32_t)now, snap.started_ms,
               (uint32_t)_last_wifi_reconnect_attempt,
               _wifi_reconnect_backoff_attempt)) {
         _last_wifi_reconnect_attempt = now;
