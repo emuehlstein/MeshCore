@@ -69,6 +69,11 @@
 // channel so an update is never stalled indefinitely.
 #define OTA_TX_DRAIN_TIMEOUT_MS     5000
 
+// Bench mitigation for a ThinkNode M7 cache-error race between a clean MQTT
+// teardown and the OTA worker allocation. 25 ms still failed intermittently;
+// 100 ms completed five consecutive one-slot OTA cycles without a crash.
+#define OTA_MQTT_STOP_SETTLE_MS      100
+
 #define LAZY_CONTACTS_WRITE_DELAY    5000
 
 void MyMesh::putNeighbour(const mesh::Identity &id, uint32_t timestamp, float snr) {
@@ -390,7 +395,7 @@ int MyMesh::handleRequest(ClientInfo *sender, uint32_t sender_timestamp, uint8_t
       int results_offset = 0;
       uint8_t results_buffer[130];
       for(int index = 0; index < count && index + offset < neighbours_count; index++){
-        
+
         // stop if we can't fit another entry in results
         int entry_size = pubkey_prefix_length + 4 + 1;
         if(results_offset + entry_size > sizeof(results_buffer)){
@@ -460,24 +465,31 @@ bool MyMesh::isLooped(const mesh::Packet* packet, const uint8_t max_counters[]) 
 }
 
 void MyMesh::sendFloodReply(mesh::Packet* packet, unsigned long delay_millis, uint8_t path_hash_size) {
-  if (recv_pkt_region && !recv_pkt_region->isWildcard()) {  // if _request_ packet scope is known, send reply with same scope
-    TransportKey scope;
-    if (region_map.getTransportKeysFor(*recv_pkt_region, &scope, 1) > 0) {
-      sendFloodScoped(scope, packet, delay_millis, path_hash_size);
-    } else {
+  TransportKey req_scope;
+  bool is_wildcard = recv_pkt_region != NULL && recv_pkt_region->isWildcard();
+  bool req_scope_known = recv_pkt_region != NULL && !is_wildcard
+                      && region_map.getTransportKeysFor(*recv_pkt_region, &req_scope, 1) > 0;
+
+  switch (mesh::chooseReplyScope(req_scope_known, is_wildcard, !default_scope.isNull())) {
+    case mesh::REPLY_SCOPE_REQUEST:
+      sendFloodScoped(req_scope, packet, delay_millis, path_hash_size);   // reply with same scope as request
+      break;
+    case mesh::REPLY_SCOPE_DEFAULT:
+      // requester's scope is unknown: DIRECT request (no transport codes), or code matched no Region.
+      // un-scoped would be dropped at hop 0 by repeaters running flood.max.unscoped=0
+      sendFloodScoped(default_scope, packet, delay_millis, path_hash_size);
+      break;
+    case mesh::REPLY_SCOPE_NONE:
       sendFlood(packet, delay_millis, path_hash_size);  // send un-scoped
-    }
-  } else {
-    sendFlood(packet, delay_millis, path_hash_size);  // send un-scoped
+      break;
   }
 }
 
 bool MyMesh::allowPacketForward(const mesh::Packet *packet) {
   if (_prefs.disable_fwd) return false;
-  if (packet->isRouteFlood()) {
-    if (packet->getPathHashCount() >= _prefs.flood_max) return false;
-    if (packet->getRouteType() == ROUTE_TYPE_FLOOD && packet->getPathHashCount() >= _prefs.flood_max_unscoped) return false;
-    if (packet->getPayloadType() == PAYLOAD_TYPE_ADVERT && packet->getPathHashCount() >= _prefs.flood_max_advert) return false;
+  if (packet->isRouteFlood()
+      && mesh::isFloodHopLimitExceeded(packet, _prefs.flood_max, _prefs.flood_max_unscoped, _prefs.flood_max_advert)) {
+    return false;
   }
   if (packet->isRouteFlood() && recv_pkt_region == NULL) {
     MESH_DEBUG_PRINTLN("allowPacketForward: unknown transport code, or wildcard not allowed for FLOOD packet");
@@ -528,6 +540,11 @@ void MyMesh::logRxRaw(float snr, float rssi, const uint8_t raw[], int len) {
 }
 
 void MyMesh::logRx(mesh::Packet *pkt, int len, float score) {
+#ifdef DISPLAY_ACTIVITY_DASHBOARD
+  // Valid parsed RF packet: the only event the dashboard's window counts.
+  _activity.recordPacket(millis(), (uint16_t)len, _radio->getEstAirtimeFor(len),
+                         (int8_t)(pkt->getSNR() * 4.0f), (int16_t)_radio->getLastRSSI());
+#endif
 #ifdef WITH_MQTT_BRIDGE
   // MQTT bridge: always feed RX packets — bridge decides based on mqtt.rx setting
   if (bridge) bridge->onPacketReceived(pkt);
@@ -677,17 +694,29 @@ void MyMesh::onAnonDataRecv(mesh::Packet *packet, const uint8_t *secret, const m
 
     if (reply_len == 0) return;   // invalid request
 
-    if (packet->isRouteFlood()) {
+    // a DIRECT login can reply via the stored out_path, as onPeerDataRecv() does for REQ
+    ClientInfo* client = acl.getClient(sender.pub_key, PUB_KEY_SIZE);
+    bool have_out_path = client != NULL && client->out_path_len != OUT_PATH_UNKNOWN;
+
+    auto route = mesh::chooseReplyRoute(packet->isRouteFlood(), reply_path_len != 0xFF, have_out_path);
+
+    if (route == mesh::REPLY_ROUTE_PATH_RETURN) {
       // let this sender know path TO here, so they can use sendDirect(), and ALSO encode the response
       mesh::Packet* path = createPathReturn(sender, secret, packet->path, packet->path_len,
                                             PAYLOAD_TYPE_RESPONSE, reply_data, reply_len);
       if (path) sendFloodReply(path, SERVER_RESPONSE_DELAY, packet->getPathHashSize());
-    } else if (reply_path_len == 0xFF) {
-      mesh::Packet* reply = createDatagram(PAYLOAD_TYPE_RESPONSE, sender, secret, reply_data, reply_len);
-      if (reply) sendFloodReply(reply, SERVER_RESPONSE_DELAY, packet->getPathHashSize());
+      return;
+    }
+
+    mesh::Packet* reply = createDatagram(PAYLOAD_TYPE_RESPONSE, sender, secret, reply_data, reply_len);
+    if (reply == NULL) return;
+
+    if (route == mesh::REPLY_ROUTE_DIRECT_SUPPLIED) {
+      sendDirect(reply, reply_path, reply_path_len, SERVER_RESPONSE_DELAY);
+    } else if (route == mesh::REPLY_ROUTE_DIRECT_OUT_PATH) {
+      sendDirect(reply, client->out_path, client->out_path_len, SERVER_RESPONSE_DELAY);
     } else {
-      mesh::Packet* reply = createDatagram(PAYLOAD_TYPE_RESPONSE, sender, secret, reply_data, reply_len);
-      if (reply) sendDirect(reply, reply_path, reply_path_len, SERVER_RESPONSE_DELAY);
+      sendFloodReply(reply, SERVER_RESPONSE_DELAY, packet->getPathHashSize());
     }
   }
 }
@@ -824,7 +853,7 @@ void MyMesh::onPeerDataRecv(mesh::Packet *packet, uint8_t type, int sender_idx, 
     memcpy(&sender_timestamp, data, 4); // timestamp (by sender's RTC clock - which could be wrong)
     uint8_t flags = (data[4] >> 2);        // message attempt number, and other flags
 
-    if (!(flags == TXT_TYPE_PLAIN || flags == TXT_TYPE_CLI_DATA)) {
+    if (!(flags == TXT_TYPE_PLAIN || flags == TXT_TYPE_CLI_DATA || flags == TXT_TYPE_CLI_COMMAND)) {
       MESH_DEBUG_PRINTLN("onPeerDataRecv: unsupported text type received: flags=%02x", (uint32_t)flags);
     } else if (sender_timestamp >= client->last_timestamp) { // prevent replay attacks
       bool is_retry = (sender_timestamp == client->last_timestamp);
@@ -1019,24 +1048,21 @@ MyMesh::MyMesh(mesh::MainBoard &board, mesh::Radio &radio, mesh::MillisecondCloc
   _prefs.bw = LORA_BW;
   _prefs.cr = LORA_CR;
   _prefs.tx_power_dbm = LORA_TX_POWER;
-#ifdef DEFAULT_ADVERT_INTERVAL
-  _prefs.advert_interval = DEFAULT_ADVERT_INTERVAL;  // stored as mins/2
-#else
   _prefs.advert_interval = 1;        // default to 2 minutes for NEW installs
   _prefs.flood_advert_interval = 47; // 47 hours
-#endif
-#ifdef DEFAULT_REPEAT_OFF
-  _prefs.disable_fwd = true;
-#endif
   _prefs.flood_max = 64;
   _prefs.flood_max_unscoped = 64;
   _prefs.flood_max_advert = 8;
   _prefs.interference_threshold = 0; // disabled
 #ifdef WITH_MQTT_BRIDGE
-  _prefs.agc_reset_interval = 7;    // 28 seconds (secs/4) — prevents AGC drift on long-running observers
+  // TODO: Re-enable this observer default once AGC reset preserves runtime
+  // radio.rxgain, or earlier if disabling it causes receiver regressions.
+  // _prefs.agc_reset_interval = 7;  // 28 seconds (secs/4)
 #endif
   // Observer defaults (radio_watchdog, alert.*, snmp.*) moved to applyMQTTDefaults()
-  // in MQTTDefaults.h — they live in /mqtt_prefs now, not NodePrefs.
+  // in MQTTDefaults.h — they live in /mqtt.json now, not NodePrefs.
+  _prefs.cad_enabled = 0;            // hardware CAD before TX (off by default; 'set cad on')
+  _prefs.loop_detect = LOOP_DETECT_MINIMAL;
 
   // bridge defaults
   _prefs.bridge_enabled = 1;    // enabled
@@ -1052,7 +1078,7 @@ MyMesh::MyMesh(mesh::MainBoard &board, mesh::Radio &radio, mesh::MillisecondCloc
   _prefs.gps_interval = 0;
   _prefs.advert_loc_policy = ADVERT_LOC_PREFS;
 
-  // MQTT/WiFi/timezone/radio_watchdog defaults live in /mqtt_prefs now (see applyMQTTDefaults).
+  // MQTT/WiFi/timezone/radio_watchdog defaults live in /mqtt.json now (see applyMQTTDefaults).
 
   _prefs.adc_multiplier = 0.0f; // 0.0f means use default board multiplier
 
@@ -1064,6 +1090,7 @@ MyMesh::MyMesh(mesh::MainBoard &board, mesh::Radio &radio, mesh::MillisecondCloc
 #endif
 #endif
   _prefs.radio_fem_rxgain = 1;      // LoRa FEM RX gain on by default (FEM boards)
+  _prefs.radio_fem_txgain = 0;      // LoRa FEM TX gain off by default (FEM boards)
   _prefs.cad_enabled = 0;           // hardware CAD before TX (off by default; 'set cad on')
 
   pending_discover_tag = 0;
@@ -1204,7 +1231,7 @@ void MyMesh::begin(FILESYSTEM *fs) {
   radio_driver.setRxBoostedGainMode(_prefs.rx_boosted_gain);
   MESH_DEBUG_PRINTLN("RX Boosted Gain Mode: %s",
                      radio_driver.getRxBoostedGainMode() ? "Enabled" : "Disabled");
-  board.setLoRaFemLnaEnabled(_prefs.radio_fem_rxgain);   // LoRa FEM LNA (FEM boards only)
+  board.attachDynamicPrefs(_prefs.getCustom());
 
   updateAdvertTimer();
   updateFloodAdvertTimer();
@@ -1415,7 +1442,7 @@ void MyMesh::formatRadioDiagReply(char *reply) {
 }
 
 void MyMesh::formatPacketStatsReply(char *reply) {
-  StatsFormatHelper::formatPacketStats(reply, radio_driver, getNumSentFlood(), getNumSentDirect(), 
+  StatsFormatHelper::formatPacketStats(reply, radio_driver, getNumSentFlood(), getNumSentDirect(),
                                        getNumRecvFlood(), getNumRecvDirect());
 }
 
@@ -1715,6 +1742,9 @@ void MyMesh::loop() {
     // duty-limited channel) is lost when the flash spins the loop and reboots.
     drainOutbound(OTA_TX_DRAIN_TIMEOUT_MS);
     setBridgeState(false);
+    // TODO: Replace this timed settle with a proven MQTT task/client/callback
+    // quiescence barrier once the teardown race's root cause is identified.
+    delay(OTA_MQTT_STOP_SETTLE_MS);
     char ota_reply[160];
     // OTA teardown barrier (Phase 5): only flash after a CLEAN MQTT shutdown.
     // A timed-out/forced stop leaves mbedTLS/heap ownership uncertain — writing

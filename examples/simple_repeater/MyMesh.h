@@ -35,6 +35,10 @@
 #include "helpers/SNMPAgent.h"
 #endif
 
+#ifdef DISPLAY_ACTIVITY_DASHBOARD
+#include <helpers/RadioActivityWindow.h>
+#endif
+
 #include <helpers/AdvertDataHelpers.h>
 #include <helpers/AlertReporter.h>
 #include <helpers/ArduinoHelpers.h>
@@ -46,6 +50,7 @@
 #include <helpers/StatsFormatHelper.h>
 #include <helpers/TxtDataHelpers.h>
 #include <helpers/RegionMap.h>
+#include <helpers/RoutingPolicy.h>
 #include "RateLimiter.h"
 
 
@@ -67,10 +72,6 @@ struct RepeaterStats {
   uint32_t n_recv_errors;
 };
 
-#ifndef MAX_CLIENTS
-  #define MAX_CLIENTS           32
-#endif
-
 struct NeighbourInfo {
   mesh::Identity id;
   uint32_t advert_timestamp;
@@ -79,11 +80,11 @@ struct NeighbourInfo {
 };
 
 #ifndef FIRMWARE_BUILD_DATE
-  #define FIRMWARE_BUILD_DATE   "9 Aug 2026"
+  #define FIRMWARE_BUILD_DATE   "14 Aug 2026"
 #endif
 
 #ifndef FIRMWARE_VERSION
-  #define FIRMWARE_VERSION   "v1.17.0"
+  #define FIRMWARE_VERSION   "v1.17.1"
 #endif
 
 #define FIRMWARE_ROLE "repeater"
@@ -100,6 +101,9 @@ class MyMesh : public mesh::Mesh, public CommonCLICallbacks
   uint64_t uptime_millis;
   unsigned long next_local_advert, next_flood_advert;
   bool _logging;
+#ifdef DISPLAY_ACTIVITY_DASHBOARD
+  RadioActivityWindow _activity;   // rolling RF receive window, for the TFT dashboard
+#endif
   NodePrefs _prefs;
   ClientACL  acl;
   CommonCLI _cli;
@@ -281,9 +285,22 @@ public:
     return &_prefs;
   }
 
+#ifdef DISPLAY_ACTIVITY_DASHBOARD
+  RadioActivityWindow* getActivityWindow() { return &_activity; }
+#endif
+
+#ifdef WITH_MQTT_BRIDGE
+  MQTTPrefs* getObserverPrefs() { return _cli.getObserverPrefs(); }
+#endif
+
   void savePrefs() override {
     _cli.savePrefs(_fs);
   }
+#ifdef WITH_MQTT_BRIDGE
+  bool saveObserverPrefs() override {
+    return _cli.saveObserverPrefs(_fs);
+  }
+#endif
 
   void sendFloodScoped(const TransportKey& scope, mesh::Packet* pkt, uint32_t delay_millis, uint8_t path_hash_size);
 

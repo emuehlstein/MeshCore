@@ -246,6 +246,11 @@ void MyMesh::logRxRaw(float snr, float rssi, const uint8_t raw[], int len) {
 }
 
 void MyMesh::logRx(mesh::Packet *pkt, int len, float score) {
+#ifdef DISPLAY_ACTIVITY_DASHBOARD
+  // Valid parsed RF packet: the only event the dashboard's window counts.
+  _activity.recordPacket(millis(), (uint16_t)len, _radio->getEstAirtimeFor(len),
+                         (int8_t)(pkt->getSNR() * 4.0f), (int16_t)_radio->getLastRSSI());
+#endif
 #ifdef WITH_MQTT_BRIDGE
   // MQTT bridge: always feed RX packets — bridge decides based on mqtt.rx setting
   if (_prefs.bridge_enabled && bridge) bridge->onPacketReceived(pkt);
@@ -354,10 +359,9 @@ uint32_t MyMesh::getDirectRetransmitDelay(const mesh::Packet *packet) {
 
 bool MyMesh::allowPacketForward(const mesh::Packet *packet) {
   if (_prefs.disable_fwd) return false;
-  if (packet->isRouteFlood()) {
-    if (packet->getPathHashCount() >= _prefs.flood_max) return false;
-    if (packet->getRouteType() == ROUTE_TYPE_FLOOD && packet->getPathHashCount() >= _prefs.flood_max_unscoped) return false;
-    if (packet->getPayloadType() == PAYLOAD_TYPE_ADVERT && packet->getPathHashCount() >= _prefs.flood_max_advert) return false;
+  if (packet->isRouteFlood()
+      && mesh::isFloodHopLimitExceeded(packet, _prefs.flood_max, _prefs.flood_max_unscoped, _prefs.flood_max_advert)) {
+    return false;
   }
   return true;
 }
@@ -545,7 +549,7 @@ void MyMesh::onPeerDataRecv(mesh::Packet *packet, uint8_t type, int sender_idx, 
     memcpy(&sender_timestamp, data, 4); // timestamp (by sender's RTC clock - which could be wrong)
     uint8_t flags = (data[4] >> 2);        // message attempt number, and other flags
 
-    if (!(flags == TXT_TYPE_PLAIN || flags == TXT_TYPE_CLI_DATA)) {
+    if (!(flags == TXT_TYPE_PLAIN || flags == TXT_TYPE_CLI_DATA || flags == TXT_TYPE_CLI_COMMAND)) {
       MESH_DEBUG_PRINTLN("onPeerDataRecv: unsupported command flags received: flags=%02x", (uint32_t)flags);
     } else if (sender_timestamp >= client->last_timestamp) { // prevent replay attacks, but send Acks for retries
       bool is_retry = (sender_timestamp == client->last_timestamp);
@@ -565,7 +569,7 @@ void MyMesh::onPeerDataRecv(mesh::Packet *packet, uint8_t type, int sender_idx, 
 
       uint8_t temp[166];
       bool send_ack;
-      if (flags == TXT_TYPE_CLI_DATA) {
+      if (flags == TXT_TYPE_CLI_DATA || flags == TXT_TYPE_CLI_COMMAND) {
         if (client->isAdmin()) {
           if (is_retry) {
             temp[5] = 0; // no reply
@@ -889,9 +893,10 @@ MyMesh::MyMesh(mesh::MainBoard &board, mesh::Radio &radio, mesh::MillisecondCloc
 #endif
 #endif
   _prefs.radio_fem_rxgain = 1;
+  _prefs.radio_fem_txgain = 0;
 
   // Observer defaults (alert.*, etc.) moved to applyMQTTDefaults() — they live
-  // in /mqtt_prefs now, not NodePrefs.
+  // in /mqtt.json now, not NodePrefs.
 
   // bridge defaults (same as repeater)
   _prefs.bridge_enabled = 1;    // enabled
@@ -900,7 +905,7 @@ MyMesh::MyMesh(mesh::MainBoard &board, mesh::Radio &radio, mesh::MillisecondCloc
   _prefs.bridge_baud = 115200;  // baud rate
   _prefs.bridge_channel = 1;    // channel 1
 
-  // MQTT/WiFi/timezone defaults live in /mqtt_prefs now (see applyMQTTDefaults).
+  // MQTT/WiFi/timezone defaults live in /mqtt.json now (see applyMQTTDefaults).
 
   next_post_idx = 0;
   next_client_idx = 0;
@@ -964,7 +969,7 @@ void MyMesh::begin(FILESYSTEM *fs) {
   radio_driver.setParams(_prefs.freq, _prefs.bw, _prefs.sf, _prefs.cr);
   radio_driver.setTxPower(_prefs.tx_power_dbm);
   radio_driver.setRxBoostedGainMode(_prefs.rx_boosted_gain);
-  board.setLoRaFemLnaEnabled(_prefs.radio_fem_rxgain);   // LoRa FEM LNA (FEM boards only)
+  board.attachDynamicPrefs(_prefs.getCustom());
 
   updateAdvertTimer();
   updateFloodAdvertTimer();
@@ -1053,15 +1058,23 @@ bool MyMesh::resolveAlertScope(TransportKey& dest) {
 }
 
 void MyMesh::sendFloodReply(mesh::Packet* packet, unsigned long delay_millis, uint8_t path_hash_size) {
-  if (recv_pkt_region && !recv_pkt_region->isWildcard()) {  // if _request_ packet scope is known, send reply with same scope
-    TransportKey scope;
-    if (region_map.getTransportKeysFor(*recv_pkt_region, &scope, 1) > 0) {
-      sendFloodScoped(scope, packet, delay_millis, path_hash_size);
-    } else {
+  TransportKey req_scope;
+  bool is_wildcard = recv_pkt_region != NULL && recv_pkt_region->isWildcard();
+  bool req_scope_known = recv_pkt_region != NULL && !is_wildcard
+                      && region_map.getTransportKeysFor(*recv_pkt_region, &req_scope, 1) > 0;
+
+  switch (mesh::chooseReplyScope(req_scope_known, is_wildcard, !default_scope.isNull())) {
+    case mesh::REPLY_SCOPE_REQUEST:
+      sendFloodScoped(req_scope, packet, delay_millis, path_hash_size);   // reply with same scope as request
+      break;
+    case mesh::REPLY_SCOPE_DEFAULT:
+      // requester's scope is unknown: DIRECT request (no transport codes), or code matched no Region.
+      // un-scoped would be dropped at hop 0 by repeaters running flood.max.unscoped=0
+      sendFloodScoped(default_scope, packet, delay_millis, path_hash_size);
+      break;
+    case mesh::REPLY_SCOPE_NONE:
       sendFlood(packet, delay_millis, path_hash_size);   // send un-scoped
-    }
-  } else {
-    sendFlood(packet, delay_millis, path_hash_size);   // send un-scoped
+      break;
   }
 }
 

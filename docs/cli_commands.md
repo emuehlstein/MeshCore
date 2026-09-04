@@ -305,6 +305,22 @@ Elsewhere it replies `Err - neighbors not enabled in this build`. If a
 
 ---
 
+#### View or change the LoRa FEM transmit-path gain state on supported boards
+**Usage:**
+- `get radio.fem.txgain`
+- `set radio.fem.txgain <state>`
+
+**Parameters:**
+- `state`: `on`|`off`
+
+**Notes:**
+- This controls a software-selectable external LoRa FEM transmit gain where the board supports it.
+- On Station G3, remove the PA PL1 jumper to allow software control. `on` selects PA PL1 high/short and `off` selects PA PL1 low/open. The PA PL2 hardware jumper determines whether this switches between power levels 1/3 or 2/4.
+- Select an operating level and SX1262 transmit power that comply with local RF limits and the Station G3 power-supply requirements.
+- The setting is saved immediately, but on Station G3 the level is applied to the hardware at the start of the next transmit, so that the PA supply rail is never re-targeted while the PA is being driven. `get` reports the configured state, which may lead the hardware until the node next transmits.
+
+---
+
 ### System
 
 #### View or change this node's name
@@ -643,6 +659,37 @@ Elsewhere it replies `Err - neighbors not enabled in this build`. If a
 **Default:** `5`
 
 **Note:** On quiet meshes, increasing this can reduce false recoveries when no traffic is expected.
+
+---
+
+#### View or change the display timeout
+**Usage:**
+- `get display.timeout`
+- `set display.timeout <seconds>`
+
+**Parameters:**
+- `seconds`: `0` to keep the display on permanently, or `1-3600` seconds of inactivity before it blanks
+
+**Default:** `60`
+
+**Note:** Observer builds with a display only. The change applies immediately and restarts the
+countdown. Tap the panel or press the USER button to wake or blank it by hand.
+
+---
+
+#### Rotate the display 180 degrees
+**Usage:**
+- `get display.flip`
+- `set display.flip <state>`
+
+**Parameters:**
+- `state`: `0`/`off` (as built) or `1`/`on` (rotated 180 degrees)
+
+**Default:** `0`
+
+**Note:** Observer builds with a display only, for a board mounted the other way up. This is
+persisted config, so it survives a firmware update - a node that looks upside down after an
+update may simply still be carrying `display.flip 1`. The boot log reports the current state.
 
 ---
 

@@ -15,6 +15,10 @@
 #include <helpers/StaticPoolPacketManager.h>
 #include <helpers/SimpleMeshTables.h>
 #include <helpers/IdentityStore.h>
+#ifdef DISPLAY_ACTIVITY_DASHBOARD
+#include <helpers/RadioActivityWindow.h>
+#endif
+
 #include <helpers/AdvertDataHelpers.h>
 #include <helpers/AlertReporter.h>
 #include <helpers/TxtDataHelpers.h>
@@ -22,6 +26,7 @@
 #include <helpers/StatsFormatHelper.h>
 #include <helpers/ClientACL.h>
 #include <helpers/RegionMap.h>
+#include <helpers/RoutingPolicy.h>
 #include <RTClib.h>
 #include <target.h>
 
@@ -38,11 +43,11 @@
 /* ------------------------------ Config -------------------------------- */
 
 #ifndef FIRMWARE_BUILD_DATE
-  #define FIRMWARE_BUILD_DATE   "9 Aug 2026"
+  #define FIRMWARE_BUILD_DATE   "14 Aug 2026"
 #endif
 
 #ifndef FIRMWARE_VERSION
-  #define FIRMWARE_VERSION   "v1.17.0"
+  #define FIRMWARE_VERSION   "v1.17.1"
 #endif
 
 #ifndef LORA_FREQ
@@ -116,6 +121,9 @@ class MyMesh : public mesh::Mesh, public CommonCLICallbacks
   uint64_t uptime_millis;
   unsigned long next_local_advert, next_flood_advert;
   bool _logging;
+#ifdef DISPLAY_ACTIVITY_DASHBOARD
+  RadioActivityWindow _activity;   // rolling RF receive window, for the TFT dashboard
+#endif
   bool region_load_active;
   NodePrefs _prefs;
   TransportKeyStore key_store;
@@ -285,9 +293,22 @@ public:
     return &_prefs;
   }
 
+#ifdef DISPLAY_ACTIVITY_DASHBOARD
+  RadioActivityWindow* getActivityWindow() { return &_activity; }
+#endif
+
+#ifdef WITH_MQTT_BRIDGE
+  MQTTPrefs* getObserverPrefs() { return _cli.getObserverPrefs(); }
+#endif
+
   void savePrefs() override {
     _cli.savePrefs(_fs);
   }
+#ifdef WITH_MQTT_BRIDGE
+  bool saveObserverPrefs() override {
+    return _cli.saveObserverPrefs(_fs);
+  }
+#endif
 
   void sendFloodScoped(const TransportKey& scope, mesh::Packet* pkt, uint32_t delay_millis, uint8_t path_hash_size);
 
