@@ -35,6 +35,10 @@
 #include "helpers/SNMPAgent.h"
 #endif
 
+#ifdef DISPLAY_ACTIVITY_DASHBOARD
+#include <helpers/RadioActivityWindow.h>
+#endif
+
 #include <helpers/AdvertDataHelpers.h>
 #include <helpers/AlertReporter.h>
 #include <helpers/ArduinoHelpers.h>
@@ -68,10 +72,6 @@ struct RepeaterStats {
   uint32_t n_recv_errors;
 };
 
-#ifndef MAX_CLIENTS
-  #define MAX_CLIENTS           32
-#endif
-
 struct NeighbourInfo {
   mesh::Identity id;
   uint32_t advert_timestamp;
@@ -101,6 +101,9 @@ class MyMesh : public mesh::Mesh, public CommonCLICallbacks
   uint64_t uptime_millis;
   unsigned long next_local_advert, next_flood_advert;
   bool _logging;
+#ifdef DISPLAY_ACTIVITY_DASHBOARD
+  RadioActivityWindow _activity;   // rolling RF receive window, for the TFT dashboard
+#endif
   NodePrefs _prefs;
   ClientACL  acl;
   CommonCLI _cli;
@@ -281,6 +284,14 @@ public:
   NodePrefs* getNodePrefs() {
     return &_prefs;
   }
+
+#ifdef DISPLAY_ACTIVITY_DASHBOARD
+  RadioActivityWindow* getActivityWindow() { return &_activity; }
+#endif
+
+#ifdef WITH_MQTT_BRIDGE
+  MQTTPrefs* getObserverPrefs() { return _cli.getObserverPrefs(); }
+#endif
 
   void savePrefs() override {
     _cli.savePrefs(_fs);
