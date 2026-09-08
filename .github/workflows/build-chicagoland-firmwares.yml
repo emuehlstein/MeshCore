@@ -12,7 +12,7 @@ on:
 env:
   # Upstream MeshCore version this fork is based on.
   # Update this when rebasing on a new upstream release.
-  MESHCORE_BASE_VERSION: "1.16.0"
+  MESHCORE_BASE_VERSION: "1.17.0"
 
 jobs:
 
