@@ -78,6 +78,8 @@ static MQTTPrefs defaults() {
   prefs.alert_mqtt_minutes = 240;
   prefs.alert_min_interval_min = 60;
   prefs.mqtt_neighbors_interval = MQTT_NEIGHBORS_DEFAULT_INTERVAL_MS;
+  prefs.display_timeout_secs = DISPLAY_TIMEOUT_DEFAULT_SECS;
+  prefs.display_flip = 0;
   strcpy(prefs.snmp_community, "public");
   for (int i = 0; i < MQTT_PREFS_SLOT_COUNT; ++i) {
     strcpy(prefs.mqtt_slot_preset[i], "none");
@@ -373,6 +375,100 @@ TEST(MQTTPrefsSerializer, SaveNormalizationIsIdempotentAgainstKnownDefaults) {
   repaired = true;
   ASSERT_TRUE(reader.apply(&repaired));
   EXPECT_FALSE(repaired) << output.text();
+}
+
+TEST(MQTTPrefsSerializer, DisplayTimeoutRoundTrips) {
+  for (uint16_t secs : {(uint16_t)0, (uint16_t)45, DISPLAY_TIMEOUT_MAX_SECS}) {
+    MQTTPrefs source = defaults();
+    source.display_timeout_secs = secs;
+
+    OutputStream output;
+    MQTTPrefsSerializer writer(&source);
+    ASSERT_TRUE(writer.saveSerial(output)) << secs;
+
+    MQTTPrefs loaded = defaults();
+    InputStream input(output.text());
+    MQTTPrefsSerializer reader(&loaded);
+    ASSERT_TRUE(reader.loadSerial(input)) << secs;
+    bool repaired = false;
+    ASSERT_TRUE(reader.apply(&repaired)) << secs;
+    EXPECT_FALSE(repaired) << secs;
+    EXPECT_EQ(secs, loaded.display_timeout_secs);
+  }
+}
+
+TEST(MQTTPrefsSerializer, DisplayFlipRoundTripsAndRepairs) {
+  MQTTPrefs source = defaults();
+  EXPECT_EQ(0, source.display_flip);
+  source.display_flip = 1;
+
+  OutputStream output;
+  MQTTPrefsSerializer writer(&source);
+  ASSERT_TRUE(writer.saveSerial(output));
+
+  MQTTPrefs loaded = defaults();
+  InputStream input(output.text());
+  MQTTPrefsSerializer reader(&loaded);
+  ASSERT_TRUE(reader.loadSerial(input));
+  bool repaired = false;
+  ASSERT_TRUE(reader.apply(&repaired));
+  EXPECT_FALSE(repaired);
+  EXPECT_EQ(1, loaded.display_flip);
+
+  MQTTPrefs prefs = defaults();
+  InputStream bogus("{version:1,display:{flip:7}}");
+  MQTTPrefsSerializer bogus_serializer(&prefs);
+  ASSERT_TRUE(bogus_serializer.loadSerial(bogus));
+  repaired = false;
+  ASSERT_TRUE(bogus_serializer.apply(&repaired));
+  EXPECT_TRUE(repaired);
+  EXPECT_EQ(0, prefs.display_flip);
+}
+
+TEST(MQTTPrefsSerializer, RepairsDisplayTimeoutOutOfRange) {
+  MQTTPrefs prefs = defaults();
+  InputStream input("{version:1,display:{timeout_s:99999}}");
+  MQTTPrefsSerializer serializer(&prefs);
+  ASSERT_TRUE(serializer.loadSerial(input));
+  bool repaired = false;
+  ASSERT_TRUE(serializer.apply(&repaired));
+  EXPECT_TRUE(repaired);
+  EXPECT_EQ(DISPLAY_TIMEOUT_DEFAULT_SECS, prefs.display_timeout_secs);
+
+  prefs = defaults();
+  InputStream negative("{version:1,display:{timeout_s:-5}}");
+  MQTTPrefsSerializer negative_serializer(&prefs);
+  ASSERT_TRUE(negative_serializer.loadSerial(negative));
+  repaired = false;
+  ASSERT_TRUE(negative_serializer.apply(&repaired));
+  EXPECT_TRUE(repaired);
+  EXPECT_EQ(DISPLAY_TIMEOUT_DEFAULT_SECS, prefs.display_timeout_secs);
+}
+
+TEST(MQTTPrefsSerializer, PrefsWrittenBeforeTheDisplayGroupStillLoad) {
+  // Upgrade path: a /mqtt.json from firmware without the display group must
+  // load cleanly and keep the default rather than collapsing to 0 ("stay on").
+  MQTTPrefs prefs = defaults();
+  InputStream input("{version:1,radio:{watchdog_min:5}}");
+  MQTTPrefsSerializer serializer(&prefs);
+  ASSERT_TRUE(serializer.loadSerial(input));
+  bool repaired = false;
+  ASSERT_TRUE(serializer.apply(&repaired));
+  EXPECT_EQ(DISPLAY_TIMEOUT_DEFAULT_SECS, prefs.display_timeout_secs);
+}
+
+TEST(MQTTPrefsSerializer, UnknownGroupsAreIgnoredSoAppendedKeysAreDowngradeSafe) {
+  // The mirror of the case above, and the reason appending `display` needed no
+  // MQTT_PREFS_JSON_FORMAT_VERSION bump: firmware that predates a group skips
+  // it rather than failing the load.
+  MQTTPrefs prefs = defaults();
+  InputStream input(
+      "{version:1,display:{timeout_s:45},future:{thing:1,nested:{x:2}}}");
+  MQTTPrefsSerializer serializer(&prefs);
+  ASSERT_TRUE(serializer.loadSerial(input));
+  bool repaired = false;
+  ASSERT_TRUE(serializer.apply(&repaired));
+  EXPECT_EQ(45, prefs.display_timeout_secs);
 }
 
 int main(int argc, char** argv) {
