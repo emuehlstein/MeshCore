@@ -193,6 +193,47 @@ TEST(ConfigSerializer, LoadSerial_IgnoreUnknowns) {
     EXPECT_TRUE(match);
 }
 
+class TestNested : public ConfigSerializer {
+    class Inner : public ConfigSerializer {
+      protected:
+        void structure() override { }   // no properties, so it writes as '{}'
+    };
+    Inner inner;
+  protected:
+    void structure() override {
+        def("age", age);
+        def("inner", inner);
+        def("name", name, sizeof(name));   // comes *after* the empty sub-object
+    }
+  public:
+    int32_t age;
+    char    name[16];
+};
+
+TEST(ConfigSerializer, LoadSerial_EmptyObject) {
+    MockInputStream s("{age:" TEST_INT_S ",inner:{},name:\"Scott\"}");
+    TestNested data;
+    data.name[0] = 0;
+
+    bool success = data.loadSerial(s);
+    EXPECT_TRUE(success);
+
+    EXPECT_EQ(TEST_INT, data.age);
+    bool match = strcmp("Scott", data.name) == 0;
+    EXPECT_TRUE(match);   // properties after an empty object must still load
+}
+
+TEST(ConfigSerializer, LoadSerial_EmptyObjectWithWhitespace) {
+    MockInputStream s("{age:" TEST_INT_S ",inner:{  },name:\"Scott\"}");
+    TestNested data;
+    data.name[0] = 0;
+
+    bool success = data.loadSerial(s);
+    EXPECT_TRUE(success);
+    bool match = strcmp("Scott", data.name) == 0;
+    EXPECT_TRUE(match);
+}
+
 TEST(DynamicConfigSerializer, GetSet_Basic) {
     DynamicConfigSerializer data;
 
@@ -426,6 +467,35 @@ TEST(DynamicConfigSerializer, LoadCustom_Basic) {
     EXPECT_TRUE(g2);
     EXPECT_STREQ("Scott", tmp);
 }
+TEST(NodePrefs, OtaChannelDefaultsToNative) {
+    NodePrefs prefs;
+    EXPECT_EQ(0, prefs.ota_channel);  // 0 == native
+}
+
+TEST(NodePrefs, OtaChannelRoundTrip) {
+    NodePrefs saved;
+    saved.ota_channel = 2;  // dev
+
+    MockPrintStream output;
+    ASSERT_TRUE(saved.saveSerial(output));
+    std::string serialised(reinterpret_cast<const char*>(output.getBytes()), output.getLength());
+    EXPECT_NE(std::string::npos, serialised.find("ota_ch:2"));
+
+    MockInputStream input(serialised.c_str());
+    NodePrefs loaded;
+    loaded.ota_channel = 1;  // start different
+    ASSERT_TRUE(loaded.loadSerial(input)) << serialised;
+    EXPECT_EQ(2, loaded.ota_channel);
+}
+
+TEST(NodePrefs, OtaChannelMissingKeyKeepsDefault) {
+    // A /prefs.json written before this field existed has no ota_ch key.
+    MockInputStream input("{name:\"n\"}");
+    NodePrefs loaded;               // ota_channel default 0 (native)
+    ASSERT_TRUE(loaded.loadSerial(input));
+    EXPECT_EQ(0, loaded.ota_channel);
+}
+
 
 // ── main ───────────────────────────────────────────────────────
 
