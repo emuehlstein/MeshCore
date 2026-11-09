@@ -72,6 +72,7 @@ public:
   uint8_t path_hash_mode = 0;   // which path mode to use when sending
   uint8_t loop_detect = 0;
   uint8_t cad_enabled = 0;      // hardware Channel Activity Detection before TX (boolean)
+  uint8_t ota_channel = 0;      // OTA release channel selector: 0=native, 1=stable, 2=dev
   uint8_t extra_sf[4];
 
   // NOTE: observer settings (MQTT/WiFi/timezone/SNMP/alert) are not in NodePrefs.
@@ -124,8 +125,8 @@ private:
     void setTxPower(int8_t dbm) override { _parent->tx_power_dbm = dbm; markDirty(); }
     float getRxDelay() const override { return _parent->rx_delay_base; }
     void setRxDelay(float d) override { _parent->rx_delay_base = d; markDirty(); }
-    uint8_t getAgcResetInt() const override { return _parent->agc_reset_interval * 4; }
-    void setAgcResetInt(uint8_t secs) override { _parent->agc_reset_interval = secs / 4; markDirty(); }
+    uint16_t getAgcResetInt() const override { return _parent->agc_reset_interval * 4; }
+    void setAgcResetInt(uint16_t secs) override { _parent->agc_reset_interval = secs / 4; markDirty(); }
     uint8_t getHashMode() const override { return _parent->path_hash_mode; }
     void setHashMode(uint8_t m) override { _parent->path_hash_mode = m; markDirty(); }
     uint8_t getMultiAcks() const override { return _parent->multi_acks; }
@@ -221,6 +222,7 @@ protected:
     def("lat", node_lat);
     def("lon", node_lon);
     def("disc_mod", discovery_mod_timestamp);  // gates 'since'-filtered DISCOVER replies
+    def("ota_ch", ota_channel);   // OTA release channel: 0=native, 1=stable, 2=dev
     def("radio", radio);
     def("bridge", bridge);
     def("gps", gps);
@@ -274,6 +276,10 @@ struct LegacyObserverTail {
 class CommonCLICallbacks {
 public:
   virtual void savePrefs() = 0;
+  // The node name feeds the DHCP hostname, which is built once when the link
+  // starts. Renaming a running node has to rebuild it or the node keeps
+  // advertising the old name to DHCP until the next reflash.
+  virtual void onNodeNameChanged() {}
 #ifdef WITH_MQTT_BRIDGE
   virtual bool saveObserverPrefs() = 0;
 #else

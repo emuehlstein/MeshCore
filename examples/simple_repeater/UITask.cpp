@@ -174,15 +174,16 @@ void UITask::renderCurrScreen() {
     }
     char wc_ssid[33], wc_ip[16];
     if (WebConfigServer::getSetupInfo(wc_ssid, sizeof(wc_ssid), wc_ip, sizeof(wc_ip))) {
+      const bool lan_setup = WebConfigServer::isLanSetup();
       // setup portal active: show join instructions instead of the home screen
       _display->setTextSize(1);
       _display->setColor(UIColor::corp_blue);
       _display->setCursor(0, 0);
-      _display->print("Observer WiFi Setup");
+      _display->print(lan_setup ? "Observer Ethernet Setup" : "Observer WiFi Setup");
 
       _display->setColor(UIColor::primary_txt);
       _display->setCursor(0, 14);
-      _display->print("Join WiFi:");
+      _display->print(lan_setup ? "Login code:" : "Join WiFi:");
       _display->setColor(UIColor::warning_txt);
       _display->setCursor(6, 24);
       _display->print(wc_ssid);
@@ -451,8 +452,10 @@ void UITask::loop() {
   }
 
   if (_powering_off_at > 0) { // power off timer armed
-#ifdef LED_PIN
+#if defined(LED_PIN) && defined(LED_STATE_ON)
     digitalWrite(LED_PIN, LED_STATE_ON); // switch on the led until poweroff
+    delay(1000);
+    digitalWrite(LED_PIN, !LED_STATE_ON); // off LED
 #endif
     if (millis() > _powering_off_at) {
       _board->powerOff();  // should not return
